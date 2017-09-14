@@ -14,6 +14,7 @@ use strict;
 use WebGUI::Form;
 use WebGUI::International;
 use WebGUI::Asset::Template;
+use URI;
 
 =head1 NAME
 
@@ -95,9 +96,11 @@ sub process {
         }
 
 	my $action;
-        if ($session->setting->get("encryptLogin")) {
-                $action = $session->url->page(undef,1);
-                $action =~ s/http:/https:/;
+        if ($session->config->get('sslEnabled') && $session->setting->get("encryptLogin")) {
+                my $uri = URI->new($session->url->page(undef,1));
+                $uri->scheme('https');
+                $uri->host_port($uri->host);
+                $action = $uri->canonical->as_string;
         }
 	$var{'form.header'} = WebGUI::Form::formHeader($session,{action=>$action})
 		.WebGUI::Form::hidden($session,{

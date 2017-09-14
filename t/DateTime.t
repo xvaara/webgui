@@ -26,7 +26,7 @@ my $session = WebGUI::Test->session;
 
 # put your tests here
 
-plan tests => 25;
+plan tests => 32;
 
 my $timeZoneUser = addUser($session);
 
@@ -55,7 +55,7 @@ is($copiedDt->toUserTimeZoneTime(), "14:12:45",            "toUserTimeZoneTime o
 $copiedDt->add(hours => 1);
 
 isa_ok($copiedDt,          "WebGUI::DateTime", "add returns itself");
-isa_ok($copiedDt->session, "WebGUI::Session",  "add does not nuke $session");
+isa_ok($copiedDt->session, "WebGUI::Session",  "add does not nuke its session");
 
 is($copiedDt->time_zone()->name, "America/Hermosillo",  "add does not change the time zone");
 is($copiedDt->toUserTimeZone(),  "2006-11-06 15:12:45", "add returns the correct time");
@@ -84,14 +84,35 @@ is(
     '... has correct epoch'
 );
 
+my $badday = eval { WebGUI::DateTime->new($session, '2001-08-161'); };
+ok($@, 'new croaks on a bad date');
+my $badday = eval { WebGUI::DateTime->new($session, '2001-08-16 99:99:99'); };
+ok($@, 'new croaks on an out of range time');
+my $badday = eval { WebGUI::DateTime->new($session, '2001-08-16 99:199:99'); };
+ok($@, 'new croaks on an illegal time');
+
+
+#----------------------------------------------------------------------------
+# Test webguiToStrftime conversion
+is( $nowDt->webguiToStrftime('%y-%m-%d'), '%Y-%m-%d', 'webgui to strftime conversion' );
+
+$timeZoneUser->update({ 'dateFormat' => '%y-%M-%D' });
+$timeZoneUser->update({ 'timeFormat' => '%H:%n %p' });
+is( $nowDt->webguiToStrftime, '%Y-%{month}-%{day} %l:%M %P', 'default datetime string' );
+
+my $single_digit = WebGUI::DateTime->new($session, '2011-07-04 15:00:00');
+is $single_digit->webguiDate("%z"), '2011-7-4', 'single digit month and day check';
+is $single_digit->webguiDate("%z"), $session->datetime->epochToHuman($single_digit->epoch, '%z'), 'webguiDate, an exact match to session->datetime';
+
 sub addUser {
 	my $session = shift;
+
 	my $user = WebGUI::User->new($session, "new");
 
 	##From my research, this particular time zone does NOT follow daylight savings,
 	##so the test will not fail in the summer
 	$user->profileField("timeZone","America/Hermosillo");
 	$user->username("Time Zone");
-    WebGUI::Test->usersToDelete($user);
+    addToCleanup($user);
 	return $user;
 }

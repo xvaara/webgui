@@ -16,6 +16,7 @@ var ImageDialog = {
 		this.fillFileList('src_list', 'tinyMCEImageList');
 		this.fillFileList('over_list', 'tinyMCEImageList');
 		this.fillFileList('out_list', 'tinyMCEImageList');
+		TinyMCE_EditableSelects.init();
 
 		if (n.nodeName == 'IMG') {
 			nl.src.value = dom.getAttrib(n, 'src');
@@ -27,7 +28,7 @@ var ImageDialog = {
 			nl.hspace.value = this.getAttrib(n, 'hspace');
 			nl.border.value = this.getAttrib(n, 'border');
 			selectByValue(f, 'align', this.getAttrib(n, 'align'));
-			selectByValue(f, 'class_list', dom.getAttrib(n, 'class'));
+			selectByValue(f, 'class_list', dom.getAttrib(n, 'class'), true, true);
 			nl.style.value = dom.getAttrib(n, 'style');
 			nl.id.value = dom.getAttrib(n, 'id');
 			nl.dir.value = dom.getAttrib(n, 'dir');
@@ -102,7 +103,7 @@ var ImageDialog = {
 
 		if (tinyMCEPopup.getParam("accessibility_warnings", 1)) {
 			if (!f.alt.value) {
-				tinyMCEPopup.editor.windowManager.confirm(tinyMCEPopup.getLang('advimage_dlg.missing_alt'), function(s) {
+				tinyMCEPopup.confirm(tinyMCEPopup.getLang('advimage_dlg.missing_alt'), function(s) {
 					if (s)
 						t.insertAndClose();
 				});
@@ -141,7 +142,7 @@ var ImageDialog = {
 		}
 
 		tinymce.extend(args, {
-			src : nl.src.value,
+			src : nl.src.value.replace(/ /g, '%20'),
 			width : nl.width.value,
 			height : nl.height.value,
 			alt : nl.alt.value,
@@ -170,12 +171,14 @@ var ImageDialog = {
 		if (el && el.nodeName == 'IMG') {
 			ed.dom.setAttribs(el, args);
 		} else {
-			ed.execCommand('mceInsertContent', false, '<img id="__mce_tmp" src="javascript:;" />', {skip_undo : 1});
+			ed.execCommand('mceInsertContent', false, '<img id="__mce_tmp" />', {skip_undo : 1});
 			ed.dom.setAttribs('__mce_tmp', args);
 			ed.dom.setAttrib('__mce_tmp', 'id', '');
 			ed.undoManager.add();
 		}
 
+		tinyMCEPopup.editor.execCommand('mceRepaint');
+		tinyMCEPopup.editor.focus();
 		tinyMCEPopup.close();
 	},
 
@@ -271,6 +274,7 @@ var ImageDialog = {
 			cl = tinyMCEPopup.editor.dom.getClasses();
 
 		if (cl.length > 0) {
+			lst.options.length = 0;
 			lst.options[lst.options.length] = new Option(tinyMCEPopup.getLang('not_set'), '');
 
 			tinymce.each(cl, function(o) {
@@ -284,6 +288,7 @@ var ImageDialog = {
 		var dom = tinyMCEPopup.dom, lst = dom.get(id), v, cl;
 
 		l = window[l];
+		lst.options.length = 0;
 
 		if (l && l.length > 0) {
 			lst.options[lst.options.length] = new Option('', '');
@@ -356,7 +361,7 @@ var ImageDialog = {
 	},
 
 	updateStyle : function(ty) {
-		var dom = tinyMCEPopup.dom, st, v, f = document.forms[0], img = dom.create('img', {style : dom.get('style').value});
+		var dom = tinyMCEPopup.dom, b, bStyle, bColor, v, isIE = tinymce.isIE, f = document.forms[0], img = dom.create('img', {style : dom.get('style').value});
 
 		if (tinyMCEPopup.editor.settings.inline_styles) {
 			// Handle align
@@ -375,14 +380,27 @@ var ImageDialog = {
 
 			// Handle border
 			if (ty == 'border') {
+				b = img.style.border ? img.style.border.split(' ') : [];
+				bStyle = dom.getStyle(img, 'border-style');
+				bColor = dom.getStyle(img, 'border-color');
+
 				dom.setStyle(img, 'border', '');
 
 				v = f.border.value;
 				if (v || v == '0') {
 					if (v == '0')
-						img.style.border = '';
-					else
-						img.style.border = v + 'px solid black';
+						img.style.border = isIE ? '0' : '0 none none';
+					else {
+						if (b.length == 3 && b[isIE ? 2 : 1])
+							bStyle = b[isIE ? 2 : 1];
+						else if (!bStyle || bStyle == 'none')
+							bStyle = 'solid';
+						if (b.length == 3 && b[isIE ? 0 : 2])
+							bColor = b[isIE ? 0 : 2];
+						else if (!bColor || bColor == 'none')
+							bColor = 'black';
+						img.style.border = v + 'px ' + bStyle + ' ' + bColor;
+					}
 				}
 			}
 
@@ -411,7 +429,7 @@ var ImageDialog = {
 			}
 
 			// Merge
-			dom.get('style').value = dom.serializeStyle(dom.parseStyle(img.style.cssText));
+			dom.get('style').value = dom.serializeStyle(dom.parseStyle(img.style.cssText), 'img');
 		}
 	},
 

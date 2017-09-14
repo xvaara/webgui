@@ -65,7 +65,7 @@ my $extensionTests = [
 	},
 ];
 
-plan tests => 49 + scalar @{ $extensionTests }; # increment this value for each test you create
+plan tests => 55 + scalar @{ $extensionTests }; # increment this value for each test you create
 
 my $session = WebGUI::Test->session;
 
@@ -82,7 +82,7 @@ ok ($uploadUrl, "uploadDir defined in config");
 ####################################################
 
 my $imageStore = WebGUI::Storage->create($session);
-WebGUI::Test->storagesToDelete($imageStore);
+WebGUI::Test->addToCleanup($imageStore);
 my $expectedFiles = ['.', ];
 cmp_bag($imageStore->getFiles(1), $expectedFiles, 'Starting with an empty storage object, no files in here except for . and ..');
 $imageStore->addFileFromScalar('.dotfile', 'dot file');
@@ -119,7 +119,7 @@ foreach my $extTest ( @{ $extensionTests } ) {
 WebGUI::Test->interceptLogging();
 
 my $thumbStore = WebGUI::Storage->create($session);
-WebGUI::Test->storagesToDelete($thumbStore);
+WebGUI::Test->addToCleanup($thumbStore);
 my $square = WebGUI::Image->new($session, 500, 500);
 $square->setBackgroundColor('#FF0000');
 $square->saveToStorageLocation($thumbStore, 'square.png');
@@ -170,7 +170,7 @@ like($WebGUI::Test::logger_error, qr/^Couldn't read image to check the size of i
 ####################################################
 
 my $imageCopy = $thumbStore->copy();
-WebGUI::Test->storagesToDelete($imageCopy);
+WebGUI::Test->addToCleanup($imageCopy);
 isa_ok($imageCopy, 'WebGUI::Storage', 'copy returns an object');
 cmp_bag(
     $imageCopy->getFiles(),
@@ -203,12 +203,14 @@ is($imageCopy->deleteFile('../../'), undef, 'deleteFile in Storage::Image also r
 ####################################################
 
 is($thumbStore->getThumbnailUrl(), '', 'getThumbnailUrl returns undef if no file is sent');
-is($WebGUI::Test::logger_error, q/Can't make a thumbnail url without a filename./, 'getThumbnailUrl logs an error message for not sending a filename');
+is($WebGUI::Test::logger_error, q/Can't find a thumbnail url without a filename./, 'getThumbnailUrl logs an error message for not sending a filename');
 
 is($thumbStore->getThumbnailUrl('round.png'), '', 'getThumbnailUrl returns undef if the requested file is not in the storage location');
-is($WebGUI::Test::logger_error, q/Can't make a thumbnail for a file named 'round.png' that is not in my storage location./, 'getThumbnailUrl logs an error message for not sending a filename');
+is($WebGUI::Test::logger_error, q/Can't find a thumbnail for a file named 'round.png' that is not in my storage location./, 'getThumbnailUrl logs an error message for not sending a filename');
 
 is($thumbStore->getThumbnailUrl('square.png'), $thumbStore->getUrl('thumb-square.png'), 'getThumbnailUrl returns the correct url');
+
+is($thumbStore->getThumbnailUrl('file.pdf'), '', '... return empty string for a file that is not an image');
 
 ####################################################
 #
@@ -219,7 +221,7 @@ is($thumbStore->getThumbnailUrl('square.png'), $thumbStore->getUrl('thumb-square
 my $origMaxImageSize = $session->setting->get('maxImageSize');
 
 my $sizeTest = WebGUI::Storage->create($session);
-WebGUI::Test->storagesToDelete($sizeTest);
+WebGUI::Test->addToCleanup($sizeTest);
 
 my $resizeTarget = 80;
 $session->setting->set('maxImageSize', 200 );
@@ -277,10 +279,41 @@ foreach my $testImage (@testImages) {
 
 $session->setting->set('maxImageSize', $origMaxImageSize );
 
+####################################################
+#
+# rotate
+#
+####################################################
+
+my $rotateTest = WebGUI::Storage->create( $session );
+WebGUI::Test->addToCleanup($rotateTest);
+
+# Add test image to the storage
+ok( $rotateTest->addFileFromFilesystem(WebGUI::Test->getTestCollateralPath("rotation_test.png")), "Can add test image to storage" );
+
+# Rotate test image by 90° CW
+my $file = $rotateTest->getFiles->[0];
+$rotateTest->rotate($file, 90);
+# Check dimensions
+cmp_bag( [$rotateTest->getSizeInPixels( $file )], [2,3], "Check size of photo after rotating 90° CW" ); 
+# Check pixels
+my $image = Image::Magick->new;
+$image->Read( $rotateTest->getPath($file) );
+is( $image->GetPixel(x=>2, y=>0), 0, "Pixel at location [2,0] should be black" );
+
+# Rotate test image by 90° CCW
+my $file = $rotateTest->getFiles->[0];
+$rotateTest->rotate($file, -90);
+# Check dimensions
+cmp_bag( [$rotateTest->getSizeInPixels( $file )], [3,2], "Check size of photo after rotating 90° CCW" ); 
+# Check pixels
+$image = Image::Magick->new;
+$image->Read( $rotateTest->getPath($file) );
+is( $image->GetPixel(x=>0, y=>0), 0, "Pixel at location [0,0] should be black" );
+
+
+
 TODO: {
 	local $TODO = "Methods that need to be tested";
 	ok(0, 'resize');
-}
-
-END {
 }

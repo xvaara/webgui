@@ -30,6 +30,7 @@ my $file
         className           => "WebGUI::Asset::File",
     });
 $versionTag->commit;
+WebGUI::Test->addToCleanup($versionTag);
 
 #----------------------------------------------------------------------------
 # Tests
@@ -50,14 +51,7 @@ $file->setFile( WebGUI::Test->getTestCollateralPath("WebGUI.pm") );
 my $storage = $file->getStorageLocation;
 
 is_deeply(
-    $storage->getFiles, ['WebGUI.pm'],
-    "Storage location contains only the file we added",
+    $storage->getFiles, ['WebGUI_pm.txt'],
+    "Storage location contains only the file we added, name was changed to prevent uploading of code",
 );
-
-
-#----------------------------------------------------------------------------
-# Cleanup
-END {
-    $versionTag->rollback();
-}
-
+#vim:ft=perl

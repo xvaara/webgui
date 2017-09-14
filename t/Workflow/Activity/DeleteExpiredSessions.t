@@ -30,6 +30,7 @@ my $workflow  = WebGUI::Workflow->create($session,
         mode       => 'realtime',
     },
 );
+WebGUI::Test->addToCleanup($workflow);
 my $activity = $workflow->addActivity('WebGUI::Workflow::Activity::DeleteExpiredSessions');
 
 my $instance1 = WebGUI::Workflow::Instance->create($session,
@@ -45,15 +46,12 @@ $retVal = $instance1->run();
 is($retVal, 'complete', 'cleanup: activity complete');
 $retVal = $instance1->run();
 is($retVal, 'done', 'cleanup: activity is done');
-$instance1->delete;
+$instance1->delete('skipNotify');
 
 my $origSessionTimeout = $session->setting->get('sessionTimeout');
 
 my $sessionCount = $session->db->quickScalar('select count(*) from userSession');
 my $scratchCount = $session->db->quickScalar('select count(*) from userSessionScratch');
-
-note $sessionCount;
-note $scratchCount;
 
 my @sessions;
 
@@ -82,6 +80,7 @@ my $instance2 = WebGUI::Workflow::Instance->create($session,
         skipSpectreNotification => 1,
     }
 );
+WebGUI::Test->addToCleanup($instance2);
 
 my $counter = 0;
 PAUSE: while ($retVal = $instance2->run()) {
@@ -113,6 +112,4 @@ foreach my $testSession (@sessions) {
 ## Make sure that one scratch session was deleted and the other kept.
 ## Close and end all four sessions
 
-END {
-    $workflow->delete;
-}
+#vim:ft=perl

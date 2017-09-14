@@ -10,20 +10,23 @@
 # http://www.plainblack.com                     info@plainblack.com
 #-------------------------------------------------------------------
 
-our ($webguiRoot);
+use strict;
+use File::Basename ();
+use File::Spec;
 
+my $webguiRoot;
 BEGIN {
-    $webguiRoot = "..";
-    unshift (@INC, $webguiRoot."/lib");
+    $webguiRoot = File::Spec->rel2abs(File::Spec->catdir(File::Basename::dirname(__FILE__), File::Spec->updir));
+    unshift @INC, File::Spec->catdir($webguiRoot, 'lib');
 }
 
 use Pod::Usage;
-use strict;
 use warnings;
 use Getopt::Long;
 use POE::Component::IKC::ClientLite;
 use Spectre::Admin;
 use WebGUI::Config;
+use JSON;
 
 $|=1; # disable output buffering
 my $help;
@@ -111,8 +114,19 @@ elsif ($daemon) {
         die "Spectre is already running.\n";
     }
     elsif (-e $pidFileName){
-        die "pidFile $pidFileName already exists\n";
+        open my $pidFile, '<', $pidFileName or die "$pidFileName: $!";
+        (my $pid) = readline $pidFile;
+        chomp $pid if defined $pid;
+        if(defined $pid and $pid =~ m/^(\d+)$/) {
+            if(kill 0, $1) {
+                die "$0: already running as PID $1";
+            } else { 
+                warn "pidfile contains $pid but that process seems to have terminated" 
+            }
+        }
+        close $pidFile;
     }
+    # XXXX warn if we can't open the log file before forking or else make it not fatal or else close STDOUT/STDERR afterwards; don't fail silently -- sdw
     #fork and exit(sleep(1) and print((ping())?"Spectre failed to start!\n":"Spectre started successfully!\n"));  #Can't have right now.
     require POSIX;
     fork and exit;
@@ -158,7 +172,17 @@ sub getStatusReport {
 	return $POE::Component::IKC::ClientLite::error unless defined $result;
 	$remote->disconnect;
 	undef $remote;
-	return $result;
+	my $pattern = "%8.8s  %-9.9s  %-30.30s  %-22.22s  %-15.15s %-20.20s\n";
+	my $total = 0;
+	my $output = sprintf $pattern, "Priority", "Status", "Sitename", "Instance Id", "Last Run", "Last Run Time";
+    foreach my $instance (@{JSON->new->decode($result)}) {
+		my $originalPriority = ($instance->{priority} - 1) * 10;
+        my $priority = $instance->{workingPriority}."/".$originalPriority;
+		$output .= sprintf $pattern, $priority, $instance->{status}, $instance->{sitename}, $instance->{instanceId}, $instance->{lastState}, ($instance->{lastRunTime} || '');
+        $total++;
+    }
+    $output .= sprintf "\n%19.19s %4d\n", "Total Workflows", $total;
+	return $output;
 }
 
 __END__

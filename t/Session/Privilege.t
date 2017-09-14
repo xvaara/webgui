@@ -73,6 +73,7 @@ my $session = WebGUI::Test->session;
 my $privilege = $session->privilege;
 
 my ($versionTag, $userTemplate) = setup_assets($session);
+WebGUI::Test->addToCleanup($versionTag);
 
 isa_ok($privilege, 'WebGUI::Session::Privilege', 'session has correct object type');
 
@@ -133,6 +134,7 @@ sub setup_assets {
 	my $properties = {
 		title => 'user template for printing',
 		className => 'WebGUI::Asset::Template',
+		parser    => 'WebGUI::Asset::Template::HTMLTemplate',
 		url => 'user_style_printable',
 		namespace => 'Style',
 		##Note, at this point 
@@ -144,9 +146,4 @@ sub setup_assets {
 	return ($versionTag, $userTemplate);
 }
 
-
-END {
-	if (defined $versionTag and ref $versionTag eq 'WebGUI::VersionTag') {
-		$versionTag->rollback;
-	}
-}
+#vim:ft=perl

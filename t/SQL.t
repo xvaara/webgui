@@ -17,7 +17,7 @@ use WebGUI::Session;
 use Data::Dumper;
 use Test::Deep;
 
-use Test::More tests => 56; # increment this value for each test you create
+use Test::More tests => 57; # increment this value for each test you create
 
 my $session = WebGUI::Test->session;
 
@@ -174,6 +174,7 @@ SKIP: {
 	skip("No InnoDB tables in this MySQL.  Skipping all transaction related tests.",7) if (lc $mysqlVariables{have_innodb} ne 'yes');
     $session->db->dbh->do('DROP TABLE IF EXISTS testTable');
     $session->db->dbh->do('CREATE TABLE testTable (myIndex int(8) NOT NULL default 0, message CHAR(64), PRIMARY KEY(myIndex)) TYPE=InnoDB');
+    addToCleanup( SQL => 'DROP TABLE testTable' );
 
     my $dbh2 = WebGUI::SQL->connect($session,$session->config->get("dsn"), $session->config->get("dbuser"), $session->config->get("dbpass"));
     my ($sth, $sth2, $rc);
@@ -224,6 +225,7 @@ SKIP: {
 
 }
 
+$session->db->dbh->do('DROP TABLE IF EXISTS testTable');
 $session->db->dbh->do('CREATE TABLE testTable (myIndex int(8) NOT NULL default 0, message CHAR(64), myKey varchar(32), PRIMARY KEY(myIndex))');
 
 my @tableData = (
@@ -298,6 +300,13 @@ cmp_deeply(
     'Check table structure',
 );
 
-END {
-    $session->db->dbh->do('DROP TABLE IF EXISTS testTable');
-}
+#----------------------------------------------------------------------------
+# REGRESSIONS
+
+# 11940 : quickCSV chokes on newlines
+$session->db->write( 
+    'INSERT INTO testTable (myIndex,message,myKey) VALUES (?,?,?)',
+    [ 10, "a\ntest", 'B' ],
+);
+ok( $session->db->quickCSV( 'SELECT * FROM testTable' ), 'get some output even with newlines in data' );
+

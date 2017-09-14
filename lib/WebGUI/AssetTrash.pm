@@ -16,6 +16,7 @@ package WebGUI::Asset;
 
 use strict;
 use WebGUI::Asset::Shortcut;
+use JSON;
 
 =head1 NAME
 
@@ -56,39 +57,20 @@ sub getAssetsInTrash {
 	my $self = shift;
 	my $limitToUser = shift;
 	my $userId = shift || $self->session->user->userId;
-	my @assets;
 	my $limit;
 	if ($limitToUser) {
-		$limit = "and asset.stateChangedBy=".$self->session->db->quote($userId);
+		$limit = "asset.stateChangedBy=".$self->session->db->quote($userId);
 	}
-	my $sth = $self->session->db->read("
-                select 
-                        asset.assetId, 
-                        assetData.revisionDate,
-                        asset.className
-                from 
-                        asset                 
-                left join 
-                        assetData on asset.assetId=assetData.assetId 
-                where 
-                        asset.state='trash'
-                        and assetData.revisionDate=(SELECT max(revisionDate) from assetData where assetData.assetId=asset.assetId)
-                        $limit
-		group by
-			assetData.assetId
-                order by 
-                        assetData.title desc
-                        ");
-        while (my ($id, $date, $class) = $sth->array) {
-		my $asset = WebGUI::Asset->new($self->session,$id,$class,$date);
-                if ($asset){
-                        push(@assets, $asset);
-                }else{
-                        $self->session->errorHandler->error("AssetTrash::getAssetsInTrash - failed to instanciate asset with assetId $id, className $class, and revisionDate $date");
-                }
-        }
-	$sth->finish;
-	return \@assets;
+    my $root = WebGUI::Asset->getRoot($self->session);
+    return $root->getLineage(
+       ["descendants", ],
+       {
+           statesToInclude => ["trash"],
+           statusToInclude => [qw/approved pending archived/],
+           returnObjects   => 1,
+           whereClause     => $limit,
+       }
+    );
 }
 
 #----------------------------------------------------------------------------
@@ -140,24 +122,23 @@ sub purge {
     }
 
     # assassinate the offspring
-	my $kids = $self->getLineage(["children"],{
-        returnObjects   => 1,
+	my $childIter = $self->getLineageIterator(["children"],{
         statesToInclude => [qw(published clipboard clipboard-limbo trash trash-limbo)],
         statusToInclude => [qw(approved archived pending)],
     });
-	foreach my $kid (@{$kids}) {
-		# Technically get lineage should never return an undefined object from getLineage when called like this, but it did so this saves the world from destruction.
-        if (defined $kid) {
-            unless ($kid->purge) {
+        while ( 1 ) {
+            my $child;
+            eval { $child = $childIter->() };
+            if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+                $session->log->error($x->full_message);
+                next;
+            }
+            last unless $child;
+            unless ($child->purge) {
                 $session->errorHandler->security("delete one of (".$self->getId.")'s children which is a system protected page");
                 $outputSub->(sprintf $i18n->get('Trying to delete system page %s.  Aborting'), $self->getTitle);
                 return 0;
             }
-        }
-        else {
-            $outputSub->($i18n->get('Undefined child'));
-			$session->errorHandler->error("getLineage returned an undefined object in the AssetTrash->purge method.  Unable to purge asset.");
-        }
 	}
 
     # Delete shortcuts to this asset
@@ -219,6 +200,64 @@ sub purge {
     return 1;
 }
 
+#-------------------------------------------------------------------
+
+=head2 purgeInFork
+
+WebGUI::Fork method called by www_purgeList
+
+=cut
+
+sub purgeInFork {
+    my ( $process, $list ) = @_;
+    my $session = $process->session;
+    my @roots = grep { $_ && $_->canEdit }
+        map { WebGUI::Asset->newPending( $session, $_ ) } @$list;
+
+    my @ids = map {
+        my $list = $_->getLineage(
+            [ 'self', 'descendants' ], {
+                statesToInclude => [qw(published clipboard clipboard-limbo trash trash-limbo)],
+                statusToInclude => [qw(approved archived pending)],
+            }
+        );
+        @$list;
+    } @roots;
+
+    my $tree = WebGUI::ProgressTree->new( $session, \@ids );
+    $process->update( sub { $tree->json } );
+    my $patch = Monkey::Patch::patch_class(
+        'WebGUI::Asset',
+        'purge',
+        sub {
+            my ( $purge, $self, $options ) = @_;
+            my $id   = $self->getId;
+            my $zero = '';
+            $tree->focus($id);
+            $options ||= {};
+            local $options->{outputSub} = sub { $zero .= $_[0] };
+            my $ret = eval { $self->$purge($options) };
+            my $e = $@;
+            $tree->focus($id);
+
+            if ($e) {
+                $tree->failure( $id, 'Died' );
+                $tree->note( $id, $e );
+            }
+            elsif ( !$ret ) {
+                $tree->failure( $id, 'Failed' );
+                $tree->note( $id, $zero );
+            }
+            else {
+                $tree->success($id);
+            }
+            $process->update( sub { $tree->json } );
+            die $e if $e;
+            return $ret;
+        }
+    );
+    $_->purge for @roots;
+} ## end sub purgeInFork
 
 #-------------------------------------------------------------------
 
@@ -265,7 +304,23 @@ sub trash {
         return undef;
     }
 
-    foreach my $asset ($self, @{$self->getLineage(['descendants'], {returnObjects => 1})}) {
+    my $assetIter = $self->getLineageIterator(
+        ['self','descendants'], {
+            statesToInclude => [qw(published clipboard clipboard-limbo trash trash-limbo)],
+            statusToInclude => [qw(approved archived pending)],
+        }
+    );
+    my $rootId    = $self->getId;
+    my $db        = $session->db;
+    $db->beginTransaction;
+    while ( 1 ) {
+        my $asset;
+        eval { $asset = $assetIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $session->log->error($x->full_message);
+            next;
+        }
+        last unless $asset;
         $outputSub->($i18n->get('Clearing search index'));
         my $index = WebGUI::Search::Index->new($asset);
         $index->delete;
@@ -274,7 +329,18 @@ sub trash {
         $outputSub->($i18n->get('Clearing cache'));
         $asset->purgeCache;
         $asset->updateHistory("trashed");
+        if ($asset->getId eq $rootId) {
+            $asset->setState('trash');
+            # setState will take care of _properties in $asset, but not in
+            # $self (whooops!), so we need to manually update.
+            my @keys = qw(state stateChangedBy stateChanged);
+            @{$self->{_properties}}{@keys} = @{$asset->{_properties}}{@keys};
+        }
+        else {
+            $asset->setState('trash-limbo');
+        }
     }
+    $db->commit;
 
     # Trash any shortcuts to this asset
     my $shortcuts 
@@ -284,18 +350,53 @@ sub trash {
         $shortcut->trash({ outputSub => $outputSub, });
     }
 
-    # Raw database work is more efficient than $asset->update
-    my $db = $session->db;
-    $db->beginTransaction;
-    $outputSub->($i18n->get('Clearing asset tables'));
-    $db->write("update asset set state='trash-limbo' where lineage like ?",[$self->get("lineage").'%']);
-    $db->write("update asset set state='trash', stateChangedBy=?, stateChanged=? where assetId=?",[$session->user->userId, time(), $self->getId]);
-    $db->commit;
-
-    # Update ourselves since we didn't use update()
-    $self->{_properties}{state} = "trash";
     return 1;
 }
+
+#-------------------------------------------------------------------
+
+=head2 trashInFork
+
+WebGUI::Fork method called by www_deleteList and www_delete to move assets
+into the trash.
+
+=cut
+
+sub trashInFork {
+    my ( $process, $list ) = @_;
+    my $session = $process->session;
+    my @roots = grep { $_->canEdit && $_->canEditIfLocked }
+        map {
+        eval { WebGUI::Asset->newPending( $session, $_ ) }
+        } @$list;
+
+    my @ids = map {
+        my $list = $_->getLineage(
+            [ 'self', 'descendants' ], {
+                statesToInclude => [qw(published clipboard clipboard-limbo trash trash-limbo)],
+                statusToInclude => [qw(approved archived pending)],
+            }
+        );
+        @$list;
+    } @roots;
+
+    my $tree = WebGUI::ProgressTree->new( $session, \@ids );
+    $process->update(sub { $tree->json });
+    my $patch = Monkey::Patch::patch_class(
+        'WebGUI::Asset',
+        'setState',
+        sub {
+            my ( $setState, $self, $state ) = @_;
+            my $id = $self->getId;
+            $tree->focus($id);
+            my $ret = $self->$setState($state);
+            $tree->success($id);
+            $process->update(sub { $tree->json });
+            return $ret;
+        }
+    );
+    $_->trash() for @roots;
+} ## end sub trashInFork
 
 require WebGUI::Workflow::Activity::DeleteExportedFiles;
 sub _invokeWorkflowOnExportedFiles {
@@ -309,11 +410,16 @@ sub _invokeWorkflowOnExportedFiles {
     if ($workflowId) {
         my ($lastExportedAs) = $self->get("lastExportedAs");
         my $wfInstance = WebGUI::Workflow::Instance->create($self->session, { workflowId => $workflowId });
-        $wfInstance->setScratch(
-            WebGUI::Workflow::Activity::DeleteExportedFiles::DELETE_FILES_SCRATCH() =>
-            Storable::freeze([ defined($lastExportedAs) ? ($lastExportedAs) : () ])
-        );
-        $wfInstance->start(1);
+        if ($wfInstance) {
+            $wfInstance->setScratch(
+                WebGUI::Workflow::Activity::DeleteExportedFiles::DELETE_FILES_SCRATCH() =>
+                Storable::freeze([ defined($lastExportedAs) ? ($lastExportedAs) : () ])
+            );
+            $wfInstance->start(1);
+        }
+        else {
+            $self->session->log->warn('The Purge Workflow from the settings has been deleted and cannot be run.');
+        }
     }
 }
 
@@ -321,7 +427,7 @@ sub _invokeWorkflowOnExportedFiles {
 
 =head2 www_delete
 
-Moves self to trash, returns www_view() method of Container or Parent if canEdit.
+Moves self to trash in fork, redirects to Container or Parent if canEdit.
 Otherwise returns AdminConsole rendered insufficient privilege.
 
 =cut
@@ -331,13 +437,19 @@ sub www_delete {
 	return $self->session->privilege->insufficient() unless ($self->canEdit && $self->canEditIfLocked);
 	return $self->session->privilege->vitalComponent() if $self->get('isSystem');
 	return $self->session->privilege->vitalComponent() if (isIn($self->getId, $self->session->setting->get("defaultPage"), $self->session->setting->get("notFoundPage")));
-	$self->trash;
+
     my $asset = $self->getContainer;
     if ($self->getId eq $asset->getId) {
         $asset = $self->getParent;
     }
-	$self->session->asset($asset);
-	return $asset->www_view;
+    $self->forkWithStatusPage({
+            plugin   => 'ProgressTree',
+            title    => 'Delete Assets',
+            redirect => $asset->getUrl,
+            method   => 'trashInFork',
+            args     => [ $self->getId ],
+        }
+    );
 }
 
 #-------------------------------------------------------------------
@@ -353,31 +465,20 @@ by the form variable C<proceeed>.
 =cut
 
 sub www_deleteList {
-	my $self     = shift;
-    my $session  = $self->session;
-    my $pb       = WebGUI::ProgressBar->new($session);
-    my $i18n     = WebGUI::International->new($session, 'Asset');
-    my $form     = $session->form;
-    my @assetIds = $form->param('assetId');
-    $pb->start($i18n->get('Delete Assets'), $session->url->extras('adminConsole/assets.gif'));
-	return $self->session->privilege->insufficient() unless $session->form->validToken;
-	ASSETID: foreach my $assetId (@assetIds) {
-        my $asset = eval { WebGUI::Asset->newPending($session,$assetId); };
-        if ($@) {
-            $pb->update(sprintf $i18n->get('Error getting asset with assetId %s'), $assetId);
-            next ASSETID;
+    my $self    = shift;
+    my $session = $self->session;
+    my $form    = $session->form;
+    return $session->privilege->insufficient() unless $session->form->validToken;
+    my $method = $form->get('proceed') || 'manageTrash';
+    $self->forkWithStatusPage({
+            plugin   => 'ProgressTree',
+            title    => 'Delete Assets',
+            redirect => $self->getUrl("func=$method"),
+            method   => 'trashInFork',
+            args     => [ $form->get('assetId') ],
         }
-		if (! ($asset->canEdit && $asset->canEditIfLocked) ) {
-            $pb->update(sprintf $i18n->get('You cannot edit the asset %s, skipping'), $asset->getTitle);
-		}
-        else {
-			$asset->trash({outputSub => sub { $pb->update(@_); } });
-        }
-	}
-    my $method = ($session->form->process("proceed")) ? $session->form->process('proceed') : 'manageTrash';
-    $pb->finish($self->getUrl('func='.$method));
-}
-
+    );
+} ## end sub www_deleteList
 
 #-------------------------------------------------------------------
 
@@ -392,15 +493,19 @@ sub www_manageTrash {
 	my $ac = WebGUI::AdminConsole->new($self->session,"trash");
 	my $i18n = WebGUI::International->new($self->session,"Asset");
 	return $self->session->privilege->insufficient() unless ($self->session->user->isInGroup(12));
-	my ($header, $limit);
-        $ac->setHelp("trash manage");
-	if ($self->session->form->process("systemTrash") && $self->session->user->isAdmin) {
+    $ac->setHelp("trash manage");
+    my $header;
+    my $limit = 1;
+    my $canAdmin = $self->session->user->isInGroup($self->session->setting->get('groupIdAdminTrash'));
+    my $systemTrash = $self->session->form->process("systemTrash");
+    if ($systemTrash && $canAdmin) {
 		$header = $i18n->get(965);
 		$ac->addSubmenuItem($self->getUrl('func=manageTrash'), $i18n->get(10,"WebGUI"));
-	} else {
-		$ac->addSubmenuItem($self->getUrl('func=manageTrash;systemTrash=1'), $i18n->get(964));
-		$limit = 1;
+        $limit = undef;
 	}
+    elsif ( $canAdmin ) {
+        $ac->addSubmenuItem($self->getUrl('func=manageTrash;systemTrash=1'), $i18n->get(964));
+    }
   	$self->session->style->setLink($self->session->url->extras('assetManager/assetManager.css'), {rel=>"stylesheet",type=>"text/css"});
         $self->session->style->setScript($self->session->url->extras('assetManager/assetManager.js'), {type=>"text/javascript"});
 	my $output = "
@@ -413,26 +518,43 @@ sub www_manageTrash {
          assetManager.AddColumn('".$i18n->get("last updated")."','','center','');
          assetManager.AddColumn('".$i18n->get("size")."','','right','');
          \n";
+
+    # To avoid string escaping issues
+    my $json = JSON->new;
+    my $amethod = sub {
+        my ($method, @args) = @_;
+        my $array = $json->encode(\@args);
+        $array =~ s/^\[//;
+        $array =~ s/\]$//;
+        $output .= "assetManager.$method($array);\n";
+    };
 	foreach my $child (@{$self->getAssetsInTrash($limit)}) {
-		my $title = $child->getTitle;
-                $title =~ s/\'/\\\'/g;
+    		my $title = $child->getTitle;
     		my $plus =$child->getChildCount({includeTrash => 1}) ? "+ " : "&nbsp;&nbsp;&nbsp;&nbsp;";
-         	$output .= "assetManager.AddLine('"
-			.WebGUI::Form::checkbox($self->session, {
-				name=>'assetId',
-				value=>$child->getId
-				})
-			."','" . $plus . "<a href=\"".$child->getUrl("op=assetManager")."\">" . $title
-			."</a>','<p style=\"display:inline;vertical-align:middle;\"><img src=\"".$child->getIcon(1)."\" style=\"vertical-align:middle;border-style:none;\" alt=\"".$child->getName."\" /></p> ".$child->getName
-			."','".$self->session->datetime->epochToHuman($child->get("revisionDate"))
-			."','".formatBytes($child->get("assetSize"))."');\n";
-         	$output .= "assetManager.AddLineSortData('','".$title."','".$child->getName
-			."','".$child->get("revisionDate")."','".$child->get("assetSize")."');\n";
+            $amethod->('AddLine',
+                WebGUI::Form::checkbox($self->session, {
+                    name=>'assetId',
+                    value=>$child->getId
+                }),
+                qq($plus<a href=").$child->getUrl("op=assetManager")
+                .qq(">$title</a>),
+			    '<p style="display:inline;vertical-align:middle;"><img src="'
+                .$child->getIcon(1)
+                .'" style="vertical-align:middle;border-style:none;" alt='
+                .$child->getName .'" /></p> ' . $child->getName,
+                $self->session->datetime->epochToHuman($child->get("revisionDate")),
+                formatBytes($child->get("assetSize"))
+            );
+            $amethod->('AddLineSortData',
+                '', $title, $child->getName,
+                $child->get('revisionDate'), $child->get('assetSize')
+            );
 	}
 	$output .= '
             assetManager.AddButton("'.$i18n->get("restore").'","restoreList","manageTrash");
             assetManager.AddButton("'.$i18n->get("purge").'","purgeList","manageTrash");
             assetManager.AddFormHidden({ name:"webguiCsrfToken", value:"'.$self->session->scratch->get('webguiCsrfToken').'"});
+            assetManager.AddFormHidden({ name:"systemTrash", value:"'.$systemTrash.'"});
             assetManager.Write();        
             var assetListSelectAllToggle = false;
             function toggleAssetListSelectAll(form) {
@@ -463,26 +585,18 @@ Returns insufficient privileges unless the submitted form passes the validToken 
 sub www_purgeList {
     my $self    = shift;
     my $session = $self->session;
+    my $form    = $session->form;
     return $session->privilege->insufficient() unless $session->form->validToken;
-    my $pb      = WebGUI::ProgressBar->new($session);
-    my $i18n    = WebGUI::International->new($session, 'Asset');
-    $pb->start($i18n->get('purge'), $session->url->extras('adminConsole/assets.gif'));
-
-    ASSETID: foreach my $id ($session->form->param("assetId")) {
-        my $asset = eval { WebGUI::Asset->newPending($session,$id); };
-        if ($@) {
-            $pb->update(sprintf $i18n->get('Error getting asset with assetId %s'), $id);
-            next ASSETID;
+    my $method = $form->get('proceed') || 'manageTrash';
+    $method .= ';systemTrash=1' if $form->get('systemTrash');
+    $self->forkWithStatusPage({
+            plugin   => 'ProgressTree',
+            title    => 'purge',
+            redirect => $self->getUrl("func=$method"),
+            method   => 'purgeInFork',
+            args     => [ $form->get('assetId') ],
         }
-        if (! $asset->canEdit) {
-            $pb->update(sprintf $i18n->get('You cannot edit the asset %s, skipping'), $asset->getTitle);
-        }
-        else {
-            $asset->purge({outputSub => sub { $pb->update(@_); } });
-        }
-    }
-    my $method = ($session->form->process("proceed")) ? $session->form->process('proceed') : 'manageTrash';
-    $pb->finish($self->getUrl('func='.$method));
+    );
 }
 
 #-------------------------------------------------------------------

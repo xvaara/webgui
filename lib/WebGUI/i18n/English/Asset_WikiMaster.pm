@@ -9,8 +9,8 @@ our $I18N = {
      },
     'allow attachments help' => {
         lastUpdated => 0,
-        message     => q|?|,
-        context     => "The number of attachments that are allowed to be placed on each wiki page."
+        message     => q|The number of attachments that are allowed to be placed on each wiki page.|,
+        context     => "Hover help for edit form.",
      },
  'assetName' => { lastUpdated => 1160157064, message => 'Wiki' },
  'asset description' => { lastUpdated => 1160157064, message => q|A wiki is a collaborative content publishing mechanism. Traditionally wiki's use the wiki markup language, but that's generally not much easier to deal with than HTML, so WebGUI's wiki instead just uses a rich editor to help users publish rich great looking content.| },
@@ -38,6 +38,18 @@ our $I18N = {
 
 	'filter code description' => {
 		message => q|Sets the level of HTML Filtering done on each Wiki entry|,
+		lastUpdated => 0,
+		context => q|Hover help for edit wobject screen|,
+	},
+
+	'top level keywords' => {
+		message => q|Top Level Keywords|,
+		lastUpdated => 0,
+		context => q|Label for edit wobject screen|,
+	},
+
+	'top level keywords description' => {
+		message => q|These keywords provide the root for the hierarchial keyword display.|,
 		lastUpdated => 0,
 		context => q|Hover help for edit wobject screen|,
 	},
@@ -523,6 +535,133 @@ listing of pages that are related to a specific keyword?| },
         lastUpdated => 0,
         context     => q{Label for link to unsubscribe from e-mail notifications},
     },
+
+    'keywords_loop' => {
+        message     => q{A loop containing all the top level keywords for this page, links to their keyword pages, and all sub pages below them.},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'keyword title' => {
+        message     => q{The name of a keyword.},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'keyword url' => {
+        message     => q{The URL to the keyword page for that keyword.  If no page exists, this variable will be empty.},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'keyword level' => {
+        message     => q{The depth of this keyword.  Top-level keywords for the wiki are level 0.},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'keyword descendants' => {
+        message     => q{The number of wiki pages that are tagged with this keyword, and all sub-keywords of this keyword.},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'indent_loop' => {
+        message     => q{A loop that runs 1 time for each level.},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'keyword indent' => {
+        message     => q{The loop iterator for the indent_loop.},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'by keyword template title' => {
+        message     => q{Wiki By Keyword Template Variables},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'by keyword keyword' => {
+        message     => q{The keyword that was requested.},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'by keyword pagesLoop' => {
+        message     => q{A loop of pages that contain the requested keyword.},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'by keyword title' => {
+        message     => q{The title of this page in the loop.},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'by keyword url' => {
+        message     => q{The url of this page in the loop.},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'by keyword synopsis' => {
+        message     => q{The synopsis of this page in the loop.},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'by keyword formHeader' => {
+        message     => q{HTML code to start the form for entering in sub-keywords.  This will be empty unless the current user can administer this wiki},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'by keyword formFooter' => {
+        message     => q{HTML code to end the form for entering in sub-keywords.  This will be empty unless the current user can administer this wiki},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'by keyword keywordForm' => {
+        message     => q{HTML code for the field for entering in sub-keywords.  This will be empty unless the current user can administer this wiki},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'by keyword submitForm' => {
+        message     => q{A button to submit the sub-keywords form.},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'Related Pages' => {
+        message     => q{Related Pages},
+        lastUpdated => 0,
+        context     => q{template label},
+    },
+
+    'keyword page variables' => {
+        message     => q{Keyword Page Variables},
+        lastUpdated => 0,
+        context     => q{template variable help},
+    },
+
+    'keyword isTopLevel' => {
+        message     => q{Whether or not the keyword is one of the keywords for the page that was called.  For the Wiki Front Page, it will only include top level keywords.  For a keyword page, it would be true for any sub-keywords of this page.},
+        lastUpdated => 0,
+        context     => q{template variable help},
+    },
+
+    'Sub-keywords' => {
+        message     => q{Sub-keywords},
+        lastUpdated => 0,
+        context     => q{template label},
+    },
+
 };
 
 1;

@@ -37,7 +37,7 @@ $session->setting->set( 'defaultVersionTagWorkflow', 'pbworkflow000000000003' );
 
 # Create a user for testing purposes
 my $user        = WebGUI::User->new( $session, "new" );
-WebGUI::Test->usersToDelete($user);
+WebGUI::Test->addToCleanup($user);
 $user->username( 'dufresne' . time );
 my $identifier  = 'ritahayworth';
 my $auth        = WebGUI::Operation::Auth::getInstance( $session, $user->authMethod, $user->userId );
@@ -62,6 +62,7 @@ my $calendar    = $node->addChild( {
 my $eventUrl;
 
 $versionTags[-1]->commit;
+WebGUI::Test->addToCleanup($versionTags[-1]);
 
 #----------------------------------------------------------------------------
 # Tests
@@ -117,6 +118,7 @@ $properties = {
     %{ $properties },
     ownerUserId     => $user->userId,
     createdBy       => $user->userId,
+    groupIdEdit     => '2',
 };
 
 cmp_deeply( $event->get, superhashof( $properties ), 'Event properties saved correctly' );
@@ -163,18 +165,10 @@ $properties = {
     %{ $properties },
     ownerUserId     => $user->userId,
     createdBy       => $user->userId,
+    groupIdEdit     => '2',
 };
 
 cmp_deeply( $event->get, superhashof( $properties ), 'Events properties saved correctly' );
-
-#----------------------------------------------------------------------------
-# Cleanup
-END {
-    for my $tag ( @versionTags ) {
-        $tag->rollback;
-    }
-
-}
 
 #----------------------------------------------------------------------------
 # getMechLogin( baseUrl, WebGUI::User, "identifier" )
@@ -197,3 +191,5 @@ sub getMechLogin {
 
     return $mech;
 }
+
+#vim:ft=perl

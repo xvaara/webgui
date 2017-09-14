@@ -51,6 +51,11 @@ our $I18N = {
 		lastUpdated => 0,
 	},
 
+	'media' => {
+		message => q|Any MediaRSS entries for this item: structure is directly copied from <a href="http://search.cpan.org/perldoc?XML::FeedPP::MediaRSS#KEYS" >XML::FeedPP::MediaRSS</a>|,
+		lastUpdated => 1301495766,
+	},
+
 	'channel_description' => {
 		message => q|A description of the content available through this channel. This variable will be populated by the first feed in a multi-feed list.|,
 		lastUpdated => 0,
@@ -244,54 +249,84 @@ our $I18N = {
 		lastUpdated => 1168227896,
 	},
 
+    'sortItemsLabel' => {
+        message => q{Sort items by},
+    },
+
+    'sortItemsLabel description' => {
+        message => q{No order: items will be in semi-random order<br />
+Publication Date: sort by item pubDate<br />
+Feed Order: Items will be in the order they appeared in the feed}
+    },
+
+    'no order' => {
+        message => 'No Order',
+        context => 'name for the sortItems value that indicates that no sorting should be done '
+	},
+
+    'feed order' => {
+        message => 'Feed Order',
+        context => 'name for the sortItems value that indicates items should be in the order they appeared in the feed'
+    },
+
+    'publication date ascending' => {
+        message => 'Publication Date (oldest first)',
+        context => 'name for the sortItems value that indicates items should be sorted by publication date from oldest to newest'
+    },
+
+    'publication date descending' => {
+        message => 'Publication Date (newest first)',
+        context => 'name for the sortItems value that indicates items should be sorted by publication date from newest to oldest'
+    },
+
 	'syndicated content asset template variables title' => {
 		message => q|Syndicated Content Asset Template Variables|,
 		lastUpdated => 1164841146
 	},
 
     'descriptionFirst100words' => {
-        message => q{The first 100 words of the description.},
-        lastUpdated => 0,
+        message => q{The first 100 words of the description, with all HTML removed.},
+        lastUpdated => 1274815483,
     },
     'descriptionFirst75words' => {
-        message => q{The first 75 words of the description.},
-        lastUpdated => 0,
+        message => q{The first 75 words of the description, with all HTML removed.},
+        lastUpdated => 1274815485,
     },
     'descriptionFirst50words' => {
-        message => q{The first 50 words of the description.},
-        lastUpdated => 0,
+        message => q{The first 50 words of the description, with all HTML removed.},
+        lastUpdated => 1274815486,
     },
     'descriptionFirst25words' => {
-        message => q{The first 25 words of the description.},
-        lastUpdated => 0,
+        message => q{The first 25 words of the description, with all HTML removed.},
+        lastUpdated => 1274815488,
     },
     'descriptionFirst10words' => {
-        message => q{The first 10 words of the description.},
-        lastUpdated => 0,
+        message => q{The first 10 words of the description, with all HTML removed.},
+        lastUpdated => 1274815490,
     },
     'descriptionFirst2paragraphs' => {
-        message => q{The first 2 paragraphs of the description.},
+        message => q{The first 2 paragraphs of the description, with all HTML removed.},
         lastUpdated => 0,
     },
     'descriptionFirstParagraph' => {
-        message => q{The first paragraph of the description.},
+        message => q{The first paragraph of the description, with all HTML removed.},
         lastUpdated => 0,
     },
     'descriptionFirst4sentences' => {
-        message => q{The first 4 sentences of the description.},
-        lastUpdated => 0,
+        message => q{The first 4 sentences of the description, with all HTML removed.},
+        lastUpdated => 1274816277,
     },
     'descriptionFirst3sentences' => {
-        message => q{The first 3 sentences of the description.},
-        lastUpdated => 0,
+        message => q{The first 3 sentences of the description, with all HTML removed.},
+        lastUpdated => 1274816276,
     },
     'descriptionFirst2sentences' => {
-        message => q{The first 2 sentences of the description.},
-        lastUpdated => 0,
+        message => q{The first 2 sentences of the description, with all HTML removed.},
+        lastUpdated => 1274816274,
     },
     'descriptionFirstSentence' => {
-        message => q{The first sentence of the description.},
-        lastUpdated => 0,
+        message => q{The first sentence of the description, with all HTML removed.},
+        lastUpdated => 1274816273,
     },
 
 };

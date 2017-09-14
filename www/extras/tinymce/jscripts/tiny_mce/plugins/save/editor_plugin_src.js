@@ -1,8 +1,11 @@
 /**
- * $Id: editor_plugin_src.js 609 2008-02-18 16:19:27Z spocke $
+ * editor_plugin_src.js
  *
- * @author Moxiecode
- * @copyright Copyright © 2004-2008, Moxiecode Systems AB, All rights reserved.
+ * Copyright 2009, Moxiecode Systems AB
+ * Released under LGPL License.
+ *
+ * License: http://tinymce.moxiecode.com/license
+ * Contributing: http://tinymce.moxiecode.com/contributing
  */
 
 (function() {
@@ -53,7 +56,7 @@
 			formObj = tinymce.DOM.get(ed.id).form || tinymce.DOM.getParent(ed.id, 'form');
 
 			if (ed.getParam("save_enablewhendirty") && !ed.isDirty())
-				return true;
+				return;
 
 			tinyMCE.triggerSave();
 
@@ -76,8 +79,6 @@
 				ed.nodeChanged();
 			} else
 				ed.windowManager.alert("Error: No form element found.");
-
-			return true;
 		},
 
 		_cancel : function() {

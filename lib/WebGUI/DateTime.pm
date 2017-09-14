@@ -486,6 +486,65 @@ sub session {
 
 
 
+=head2 webguiToStrftime ( format ) 
+
+Change a WebGUI format into a Strftime format.
+
+NOTE: %M in WebGUI's format has no equivalent in strftime format, so it will
+be replaced with "{month}".  Single digit hours are handled similarly.  DateTime's
+strftime will use {method} to call a method on the object to fill in that part of
+the format.
+
+=cut
+
+sub webguiToStrftime {
+    my ( $self, $format ) = @_;
+    $format ||= "%z %Z";
+    my $session = $self->session;
+    my $temp;
+
+    #--- date format preference
+    $temp = $session->user->profileField('dateFormat') || '%y-%M-%D';
+    $format =~ s/\%z/$temp/g;
+
+    #--- time format preference
+    $temp = $session->user->profileField('timeFormat') || '%H:%n %p';
+    $format =~ s/\%Z/$temp/g;
+
+    #--- convert WebGUI date formats to DateTime formats
+    my %conversion = (
+                "c" => "B",
+                "C" => "b",
+                "d" => "d",
+                "D" => "{day}",
+                "h" => "I",
+                "H" => "l",
+                "j" => "H",
+                "J" => "k",
+                "m" => "m",
+                "M" => "{month}",
+                "n" => "M",
+                "t" => "Z",
+                "O" => "z",
+                "p" => "P",
+                "P" => "p",
+                "s" => "S",
+                "V" => "V",
+                "w" => "A",
+                "W" => "a",
+                "y" => "Y",
+                "Y" => "y"
+                );
+
+    $format =~ s/\%(\w)/\~$1/g;
+    foreach my $key (keys %conversion) {
+        my $replacement = $conversion{$key};
+        $format =~ s/\~$key/\%$replacement/g;
+    }
+
+    return $format;
+}
+
 #######################################################################
 
 =head2 webguiDate ( format )
@@ -527,54 +586,10 @@ sub webguiDate {
    my $self = shift;
    my $session = $self->session;
    return undef unless ($session);
-   my $format = shift || "%z %Z";
-   my $temp;
-   
-   #---date format preference
-   $temp = $session->user->profileField('dateFormat') || '%y-%M-%D';
-   $format =~ s/\%z/$temp/g;
-   
-   #---time format preference
-   $temp = $session->user->profileField('timeFormat') || '%H:%n %p';
-   $format =~ s/\%Z/$temp/g;
-   
-   #--- convert WebGUI date formats to DateTime formats
-   my %conversion = (
-		"c" => "B",
-		"C" => "b",
-		"d" => "d",
-		"D" => "e",
-		"h" => "I",
-		"H" => "l",
-		"j" => "H",
-		"J" => "k",
-		"m" => "m",
-		"M" => "_varmonth_",
-		"n" => "M",
-		"t" => "Z",
-		"O" => "z",
-		"p" => "P",
-		"P" => "p",
-		"s" => "S",
-		"V" => "V",
-		"w" => "A",
-		"W" => "a",
-		"y" => "Y",
-		"Y" => "y"
-		);
-   
-   $format =~ s/\%(\w)/\~$1/g;
-   foreach my $key (keys %conversion) {
-      my $replacement = $conversion{$key};
-	  $format =~ s/\~$key/\%$replacement/g;
-   }
-   
-   #--- %M
+
+   my $format = $self->webguiToStrftime( shift || "%z %Z" );
+
    my $datestr = $self->strftime($format);
-   $temp = int($self->month);
-   $datestr =~ s/\%_varmonth_/$temp/g;
-   
-   #--- return
    return $datestr;
 }
 #######################################################################
@@ -594,23 +609,27 @@ sub _splitMysql
 
     @hash{ qw( year month day hour minute second ) } 	
         = $string =~ m{
-          (\d+)   # Year
+          ^
           \D*
-          (\d+)   # Month
-          \D*
-          (\d+)   # Day
-          (?: \D*
-              (\d+)   # Hours
-              \D*
-              (\d+)   # Minutes
-              \D*
-              (\d+)   # Seconds
+          (\d{1,4})   # Year
+          \D+
+          (\d{1,2})   # Month
+          \D+
+          (\d{1,2})   # Day
+          (?: \D+
+              (\d{1,2})   # Hours
+              \D+
+              (\d{1,2})   # Minutes
+              \D+
+              (\d{1,2})   # Seconds
           )?
+          \D*
+          $
         }x;
 
-    foreach my $unit (qw/hour minute second/) {
-        $hash{$unit} = 0 if ($hash{$unit} eq '');
-    }
+    $hash{ hour   } ||= 0;
+    $hash{ minute } ||= 0;
+    $hash{ second } ||= 0;
 	return %hash;
 }
 

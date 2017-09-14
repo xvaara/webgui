@@ -291,6 +291,24 @@ our $I18N =
         context     => q{Help for template variable},
     },
 
+    'keywordsLoop' => {
+        message     => q{A loop containing all keywords for this page is tagged with.},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'keyword title' => {
+        message     => q{The name of this keyword.},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
+    'keyword url' => {
+        message     => q{The URL to view all pages tagged with this keyword.  The URL will have the gateway URL prepended to it.},
+        lastUpdated => 0,
+        context     => q{Help for template variable},
+    },
+
     'help owner' => {
         message     => q{The username of the owner of the page},
         lastUpdated => 0,
@@ -309,12 +327,12 @@ our $I18N =
         context     => 'Body text for help page',
     },
 
-
     'isFeatured label' => {
         message     => q{Feature this on the front page},
         lastUpdated => 0,
         context     => 'Label for asset property',
     },
+
 };
 
 1;

@@ -21,10 +21,16 @@ our $I18N = {
         lastUpdated => 1230844137,
     },
 
-    'user_full_name' => {
-        message     => q{The full name of the user},
+    'profile_user_id' => {
+        message     => q{The userId of the user whose account is being viewed.},
         context     => q{template variable},
         lastUpdated => 1230844137,
+    },
+
+    'user_full_name' => {
+        message     => q{The full name of the user whose account is being viewed},
+        context     => q{template variable},
+        lastUpdated => 1330588033,
     },
 
     'user_member_since' => {
@@ -96,6 +102,12 @@ our $I18N = {
     'is_active' => {
         message     => q{This variable will be true if this plugin is currently being viewed.},
         context     => q{template variable},
+        lastUpdated => 1230844137,
+    },
+
+    'Return to Account' => {
+        message     => q{Return to Account},
+        context     => q{label for templates that want to provide a link back to the main account page},
         lastUpdated => 1230844137,
     },
 

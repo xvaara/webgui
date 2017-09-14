@@ -32,7 +32,11 @@ use WebGUI::Storage;
 use WebGUI::User;
 use WebGUI::Utility;
 use WebGUI::VersionTag;
-our @ISA = qw(WebGUI::Asset);
+use Class::C3;
+use base qw(
+   WebGUI::AssetAspect::AutoSynopsis
+   WebGUI::Asset 
+);
 
 #-------------------------------------------------------------------
 
@@ -55,14 +59,13 @@ sub _fixReplyCount {
     my $self    = shift;
     my $asset   = shift;
 
-    my $lastPost = $asset->getLineage( [ qw{ self descendants } ], {
-        returnObjects   => 1,
+    my $lastPostId = $asset->getLineage( [ qw{ self descendants } ], {
         isa             => 'WebGUI::Asset::Post',
         orderByClause   => 'assetData.revisionDate desc',
         limit           => 1,
     } )->[0];
 
-    if ($lastPost) {
+    if (my $lastPost = WebGUI::Asset->newByDynamicClass( $self->session, $lastPostId ) ) {
         $asset->incrementReplies( $lastPost->get( 'revisionDate' ), $lastPost->getId );
     }
     else {
@@ -86,7 +89,7 @@ sub addChild {
 		$self->session->errorHandler->security("add a ".$properties->{className}." to a ".$self->get("className"));
 		return undef;
 	}
-	return $self->SUPER::addChild($properties, @other);
+	return $self->next::method($properties, @other);
 }
 
 #-------------------------------------------------------------------
@@ -99,7 +102,7 @@ Override the default method in order to deal with attachments.
 
 sub addRevision {
         my $self = shift;
-        my $newSelf = $self->SUPER::addRevision(@_);
+        my $newSelf = $self->next::method(@_);
         if ($newSelf->get("storageId") && $newSelf->get("storageId") eq $self->get('storageId')) {
                 my $newStorage = WebGUI::Storage->get($self->session,$self->get("storageId"))->copy;
                 $newSelf->update({storageId=>$newStorage->getId});
@@ -130,7 +133,7 @@ Extend the master class to make the default group 7.
 sub canAdd {
 	my $class = shift;
 	my $session = shift;
-	$class->SUPER::canAdd($session, undef, '7');
+	$class->next::method($session, undef, '7');
 }
 
 #-------------------------------------------------------------------
@@ -229,7 +232,7 @@ increment replies for the parent thread.
 
 sub commit {
 	my $self = shift;
-	$self->SUPER::commit;
+	$self->next::method;
     
     $self->notifySubscribers unless ($self->shouldSkipNotification);
            
@@ -259,7 +262,7 @@ sub cut {
     my $cs      = $thread->getParent;
 
     # Cut the asset
-    my $result = $self->SUPER::cut;
+    my $result = $self->next::method;
 
     # If a post is being cut update the thread reply count first
     if ($thread->getId ne $self->getId) {
@@ -347,9 +350,76 @@ sub definition {
         className=>'WebGUI::Asset::Post',
         properties=>$properties,
     });
-    return $class->SUPER::definition($session,$definition);
+    return $class->next::method($session,$definition);
 }
 
+
+#-------------------------------------------------------------------
+
+=head2 disqualifyAsLastPost ( )
+
+This method should be called whenever something happens to the Post or Thread that would disqualify
+it as being the last post in a Thread, or Collaboration System.  Good examples are cutting to the
+clipboard, trashing, or archiving.
+
+If the Post was the last post, it will find the second to last post for each kind of parent asset,
+and update that asset with that Post's information.
+
+=cut
+
+sub disqualifyAsLastPost {
+	my $self = shift;
+    my $thread = $self->getThread;
+    if ($thread->get('lastPostId') eq $self->getId) {
+        my $secondary_post = $thread->getLineage(['descendants'], {
+            returnObjects       => 1,
+            includeOnlyClasses  => ["WebGUI::Asset::Post", ],
+            limit               => 1,
+            orderByClause       => 'revisionDate,lineage DESC',
+        })->[0];
+        if ($secondary_post) {  ##Handle edge case for no other
+            $thread->update({ lastPostId => $secondary_post->getId, lastPostDate => $secondary_post->get('creationDate'), });
+        }
+        else {
+            $thread->update({ lastPostId => '', lastPostDate => '', });
+        }
+    }
+    my $cs = $thread->getParent;
+    if ($cs->get('lastPostId') eq $self->getId) {
+        my $secondary_post = $cs->getLineage(['descendants'], {
+            returnObjects       => 1,
+            includeOnlyClasses  => ["WebGUI::Asset::Post","WebGUI::Asset::Post::Thread"],
+            limit               => 1,
+            orderByClause       => 'revisionDate DESC',
+        })->[0];
+        if ($secondary_post) {  ##Handle edge case for no other
+            $cs->update({ lastPostId => $secondary_post->getId, lastPostDate => $secondary_post->get('creationDate'), });
+        }
+        else {
+            $cs->update({ lastPostId => '', lastPostDate => '', });
+        }
+    }
+}
+
+#-------------------------------------------------------------------
+
+=head2 duplicate ( )
+
+Extend the base method to handle duplicate storage locations and groups.
+
+=cut
+
+sub duplicate {
+	my $self    = shift;
+    my $session = $self->session;
+    my $copy    = $self->SUPER::duplicate(@_);
+    if ($self->get('storageId')) {
+        my $storage        = $self->getStorageLocation;
+        my $copied_storage = $storage->copy;
+        $copy->update({storageId => $copied_storage->getId});
+    }
+    return $copy;
+}
 
 #-------------------------------------------------------------------
 
@@ -362,7 +432,7 @@ Extend the base method to delete the locally cached thread object.
 sub DESTROY {
 	my $self = shift;
 	$self->{_thread}->DESTROY if (exists $self->{_thread} && ref $self->{_thread} =~ /Thread/);
-	$self->SUPER::DESTROY;
+	$self->next::method;
 }
 
 
@@ -376,7 +446,7 @@ Extend the base class to handle storage locations.
 
 sub exportAssetData {
 	my $self = shift;
-	my $data = $self->SUPER::exportAssetData;
+	my $data = $self->next::method;
 	push(@{$data->{storage}}, $self->get("storageId")) if ($self->get("storageId") ne "");
 	return $data;
 }
@@ -398,7 +468,7 @@ sub fixUrl {
 	my $url = shift;
 	$url =~ s/\./_/g;
 
-	$self->SUPER::fixUrl($url);
+	$self->next::method($url);
 }
 
 #-------------------------------------------------------------------
@@ -494,6 +564,34 @@ sub getDeleteUrl {
 	my $self = shift;
 	return $self->getUrl("func=delete;revision=".$self->get("revisionDate"));
 }
+
+#-------------------------------------------------------------------
+
+=head2 getThreadLinkUrl ( )
+
+Returns the URL for this Post, which links directly to its anchor and page.
+
+=cut
+
+sub getThreadLinkUrl {
+	my $self = shift;
+    my $url;
+    my $paginator = WebGUI::Paginator->new($self->session, '', $self->getThread->getParent->get('postsPerPage'));
+    my $page_size = $paginator->{_rpp}; ##To make sure defaults are handled correctly.
+    my $place     = $self->getRank+1;
+    my $page      = int($place/$page_size) + 1;
+    my $page_frag = 'pn='.$page;
+    if ($self->get("status") eq "pending") {
+        $url = $self->getUrl($page_frag.";revision=".$self->get("revisionDate"));
+    }
+    else {
+        $url = $self->getUrl($page_frag);
+    }
+    $url .= "#id".$self->getId;
+
+    return $url;
+}
+
 
 #-------------------------------------------------------------------
 
@@ -627,49 +725,6 @@ sub getStorageLocation {
 
 #-------------------------------------------------------------------
 
-=head2 getSynopsisAndContent ($synopsis, $body)
-
-Returns a synopsis taken from the body of the Post, based on either the separator
-macro, the first html paragraph, or the first physical line of text as defined by
-newlines.
-
-Returns both the synopsis, and the original body content.
-
-=head3 $synopsis
-
-If passed in, it returns that instead of the calculated synopsis.
-
-=head3 $body
-
-Body of the Post to use a source for the synopsis.
-
-=cut
-
-sub getSynopsisAndContent {
-	my $self = shift;
-	my $synopsis = shift;
-	my $body = shift;
-	unless ($synopsis) {
-           my @content;
-           if( $body =~ /\^\-\;/ ) {
-               my @pieces = WebGUI::HTML::splitSeparator($body);
-               $content[0] = shift @pieces;
-               $content[1] = join '', @pieces;
-           }
-           elsif( $body =~ /<p>/ ) {
-               @content = WebGUI::HTML::splitTag($body);
-           }
-           else {
-       	       @content = split("\n",$body);
-           }
-           shift @content if $content[0] =~ /^\s*$/;
-           $synopsis = WebGUI::HTML::filter($content[0],"all");
-	}
-	return ($synopsis,$body);
-}
-
-#-------------------------------------------------------------------
-
 =head2 getTemplateMetadataVars ( $var )
 
 Append metadata as template variables.
@@ -741,23 +796,26 @@ sub getTemplateVars {
 	unless ($self->get("storageId") eq "") {
 		my $storage = $self->getStorageLocation;
 		foreach my $filename (@{$storage->getFiles}) {
-			if (!$gotImage && $storage->isImage($filename)) {
-				$var{"image.url"} = $storage->getUrl($filename);
+			my $isImage = $storage->isImage($filename);
+			my $fileUrl = $storage->getUrl($filename);
+			if (!$gotImage && $isImage) {
+				$var{"image.url"} = $fileUrl;
 				$var{"image.thumbnail"} = $storage->getThumbnailUrl($filename);
 				$gotImage = 1;
 			}
-			if (!$gotAttachment && !$storage->isImage($filename)) {
-				$var{"attachment.url"} = $storage->getUrl($filename);
+			if (!$gotAttachment && !$isImage) {
+				$var{"attachment.url"} = $fileUrl;
 				$var{"attachment.icon"} = $storage->getFileIconUrl($filename);
 				$var{"attachment.name"} = $filename;
 				$gotAttachment = 1;
        			}	
 			push(@{$var{"attachment_loop"}}, {
-				url=>$storage->getUrl($filename),
-				icon=>$storage->getFileIconUrl($filename),
-				filename=>$filename,
-				thumbnail=>$storage->getThumbnailUrl($filename),
-				isImage=>$storage->isImage($filename)
+				url       => $fileUrl,
+				icon      => $storage->getFileIconUrl($filename),
+				filename  => $filename,
+				extension => WebGUI::Storage->getFileExtension($filename),
+				thumbnail => $isImage ? $storage->getThumbnailUrl($filename) : '',
+				isImage   => $isImage,
 				});
 		}
 	}
@@ -843,7 +901,7 @@ Indexing the content of attachments and user defined fields. See WebGUI::Asset::
 
 sub indexContent {
 	my $self = shift;
-	my $indexer = $self->SUPER::indexContent;
+	my $indexer = $self->next::method;
 	$indexer->addKeywords($self->get("content"));
 	$indexer->addKeywords($self->get("userDefined1"));
 	$indexer->addKeywords($self->get("userDefined2"));
@@ -1030,13 +1088,10 @@ Extends the master method to handle incrementing replies.
 sub paste {
     my $self = shift;
 
-    $self->SUPER::paste(@_);
+    $self->next::method(@_);
 
     # First, figure out what Thread we're under
-    my $thread = $self->getLineage( [ qw{ self ancestors } ], {
-        returnObjects   => 1,
-        isa             => 'WebGUI::Asset::Post::Thread',
-    } )->[0];
+    my $thread = $self->getThread;
 
     # If the pasted asset is not a thread we'll have to update the threadId of it and all posts below it.
     if ( $self->get('threadId') ne $self->getId ) {
@@ -1075,7 +1130,7 @@ non-sticky, locking and unlocking posts.  Calls postProcess when it is done.
 
 sub processPropertiesFromFormPost {
 	my $self = shift;
-	$self->SUPER::processPropertiesFromFormPost;	
+	$self->next::method;	
     my $session = $self->session;
     my $form    = $session->form;
 	my $i18n = WebGUI::International->new($session);
@@ -1098,6 +1153,9 @@ sub processPropertiesFromFormPost {
     }
     else {
         $self->getThread->unsubscribe;
+    }
+    if ($self->canEdit && $form->process('skip_notification')) {
+        $self->setSkipNotification;
     }
     if ($self->getThread->getParent->canEdit) {
         $form->process('isLocked') ?  $self->getThread->lock  : $self->getThread->unlock;
@@ -1122,7 +1180,7 @@ sub postProcess {
 	my %data = ();
 	($data{synopsis}, $data{content}) = $self->getSynopsisAndContent($self->get("synopsis"), $self->get("content"));
     my $spamStopWords = $self->session->config->get('spamStopWords');
-    if (ref $spamStopWords eq 'ARRAY') {
+    if (ref $spamStopWords eq 'ARRAY' && @{ $spamStopWords }) {
         my $spamRegex = join('|',@{$spamStopWords});
         $spamRegex =~ s/\s/\\ /g;
         if ($data{content} =~ m/$spamRegex/xmsi) {
@@ -1130,10 +1188,9 @@ sub postProcess {
             $self->trash;
         }
     }
-	my $user = WebGUI::User->new($self->session, $self->get("ownerUserId"));
 	my $i18n = WebGUI::International->new($self->session, "Asset_Post");
 	if ($self->getThread->getParent->get("addEditStampToPosts")) {
-		$data{content} .= "<p>\n\n --- (".$i18n->get('Edited_on')." ".$self->session->datetime->epochToHuman(undef,"%z %Z [GMT%O]")." ".$i18n->get('By')." ".$user->profileField("alias").") --- \n</p>";
+		$data{content} .= "<p>\n\n --- (".$i18n->get('Edited_on')." ".$self->session->datetime->epochToHuman(undef,"%z %Z [GMT%O]")." ".$i18n->get('By')." ".$self->session->user->profileField("alias").") --- \n</p>";
 	}
 	$data{url} = $self->fixUrl($self->getThread->get("url")."/1") if ($self->isReply && $self->isNew);
 	$data{groupIdView} = $self->getThread->getParent->get("groupIdView");
@@ -1153,12 +1210,19 @@ sub postProcess {
 
 #-------------------------------------------------------------------
 
-#sub publish {
-#	my $self = shift;
-#	$self->SUPER::publish(@_);
-#
-#	$self->getThread->sumReplies;
-#}
+=head2 publish 
+
+Extend the base method to handle updating last post information in the parent Thread
+and CS.
+
+=cut
+
+sub publish {
+    my $self = shift;
+    $self->next::method(@_);
+    $self->qualifyAsLastPost;
+    return 1;
+}
 
 #-------------------------------------------------------------------
 
@@ -1169,14 +1233,18 @@ Extend the base method to handle cleaning up storage locations.
 =cut
 
 sub purge {
-        my $self = shift;
+    my $self = shift;
+    my $purged = $self->next::method;
+    if ($purged) {
         my $sth = $self->session->db->read("select storageId from Post where assetId=".$self->session->db->quote($self->getId));
         while (my ($storageId) = $sth->array) {
-		my $storage = WebGUI::Storage->get($self->session, $storageId);
+        my $storage = WebGUI::Storage->get($self->session, $storageId);
                 $storage->delete if defined $storage;
         }
         $sth->finish;
-        return $self->SUPER::purge;
+        $self->disqualifyAsLastPost;
+    }
+    return $purged;
 }
 
 #-------------------------------------------------------------------
@@ -1190,7 +1258,7 @@ Extend the base class to handle caching.
 sub purgeCache {
 	my $self = shift;
 	WebGUI::Cache->new($self->session,"view_".$self->getThread->getId)->delete if ($self->getThread);
-	$self->SUPER::purgeCache;
+	$self->next::method;
 }
 
 #-------------------------------------------------------------------
@@ -1204,10 +1272,35 @@ Extend the base method to handle deleting the storage location.
 sub purgeRevision {
     my $self = shift;
     $self->getStorageLocation->delete;
-    return $self->SUPER::purgeRevision;
+    return $self->next::method;
 }
 
 
+
+#-------------------------------------------------------------------
+
+=head2 qualifyAsLastPost ( )
+
+This method should be called whenever something happens to the Post or Thread that would qualify
+it as being the last post in a Thread, or Collaboration System.  Good examples are pasting from
+the clipboard, restoring from the trash, or changing the state from archiving.
+
+It checks the parent Thread and CS to see if it is now the last Post, and updates that asset with
+its information.
+
+=cut
+
+sub qualifyAsLastPost {
+    my ($self) = @_;
+    my $thread = $self->getThread();
+    if ($self->get('creationDate') > $thread->get('lastPostDate')) {
+        $thread->update({ lastPostId => $self->getId, lastPostDate => $self->get('creationDate'), });
+    }
+    my $cs = $thread->getParent;
+    if ($self->get('creationDate') > $cs->get('lastPostDate')) {
+        $cs->update({ lastPostId => $self->getId, lastPostDate => $self->get('creationDate'), });
+    }
+}
 
 #-------------------------------------------------------------------
 
@@ -1264,7 +1357,7 @@ the thread rating.
 
 sub restore {
     my $self = shift;
-    $self->SUPER::restore(@_);
+    $self->next::method(@_);
     $self->getThread->sumReplies;
     $self->getThread->updateThreadRating;
 }
@@ -1305,7 +1398,7 @@ sub setParent {
         my $self = shift;
         my $newParent = shift;
         return 0 unless ($newParent->get("className") eq "WebGUI::Asset::Post" || $newParent->get("className") eq "WebGUI::Asset::Post::Thread");
-        return $self->SUPER::setParent($newParent);
+        return $self->next::method($newParent);
 }
 
 
@@ -1313,14 +1406,16 @@ sub setParent {
 
 =head2 setStatusArchived ( )
 
-Sets the status of this post to archived.
+Sets the status of this post to archived.  Updates the parent thread and CS to remove
+the lastPost, if this post is the last post.
 
 =cut
 
 
 sub setStatusArchived {
-        my ($self) = @_;
-        $self->update({status=>'archived'});
+    my ($self) = @_;
+    $self->update({status=>'archived'});
+    $self->disqualifyAsLastPost;
 }
 
 
@@ -1329,42 +1424,32 @@ sub setStatusArchived {
 =head2 setStatusUnarchived ( )
 
 Sets the status of this post to approved, but does so without any of the normal notifications and other stuff.
+Updates the last post information in the parent Thread and CS if applicable.
 
 =cut
 
 
 sub setStatusUnarchived {
-        my ($self) = @_;
-        $self->update({status=>'approved'}) if ($self->get("status") eq "archived");
+    my ($self) = @_;
+    $self->update({status=>'approved'}) if ($self->get("status") eq "archived");
+    $self->qualifyAsLastPost;
 }
 
 #-------------------------------------------------------------------
 
 =head2 trash ( )
 
-Moves post to the trash, updates reply counter on thread and recalculates the thread rating.
+Moves post to the trash, updates reply counter on thread, recalculates the thread rating,
+and updates any lastPost information in the parent Thread, and CS.
 
 =cut
 
 sub trash {
     my $self = shift;
-    $self->SUPER::trash;
+    $self->next::method;
     $self->getThread->sumReplies if ($self->isReply);
     $self->getThread->updateThreadRating;
-    if ($self->getThread->get("lastPostId") eq $self->getId) {
-        my $threadLineage = $self->getThread->get("lineage");
-        my ($id, $date) = $self->session->db->quickArray("select assetId, creationDate from asset where 
-            lineage like ? and assetId<>? and asset.state='published' and className like 'WebGUI::Asset::Post%' 
-            order by creationDate desc",[$threadLineage.'%', $self->getId]);
-        $self->getThread->update({lastPostId=>$id, lastPostDate=>$date});
-    }
-    if ($self->getThread->getParent->get("lastPostId") eq $self->getId) {
-        my $forumLineage = $self->getThread->getParent->get("lineage");
-        my ($id, $date) = $self->session->db->quickArray("select assetId, creationDate from asset where 
-            lineage like ? and assetId<>? and asset.state='published' and className like 'WebGUI::Asset::Post%' 
-            order by creationDate desc",[$forumLineage.'%', $self->getId]);
-        $self->getThread->getParent->update({lastPostId=>$id, lastPostDate=>$date});
-    }
+    $self->disqualifyAsLastPost;
 }
 
 #-------------------------------------------------------------------
@@ -1383,7 +1468,7 @@ sub update {
         view => $self->get("groupIdView"),
         edit => $self->get("groupIdEdit")
     );
-    $self->SUPER::update({%$properties, isHidden => 1});
+    $self->next::method({%$properties, isHidden => 1});
     if ($self->get("ownerUserId") ne $before{owner} || $self->get("groupIdEdit") ne $before{edit} || $self->get("groupIdView") ne $before{view}) {
     my $storage = $self->getStorageLocation;
         if (-d $storage->getPath) {
@@ -1402,7 +1487,7 @@ Extend the base method to also prepare the Thread containing this Post.
 
 sub prepareView {
 	my $self = shift;
-	$self->SUPER::prepareView;
+	$self->next::method;
 	unless ($self->getThread->getId eq $self->getId) {
 		# Need the unless to avoid infinite recursion.
 		$self->getThread->prepareView;
@@ -1449,16 +1534,15 @@ Renders a template form for adding and editing posts.
 =cut
 
 sub www_edit {
-	my $self      = shift;
+    my $self      = shift;
     my $session   = $self->session;
     my $form      = $session->form;
     my $privilege = $session->privilege;
     my $user      = $session->user;
     my $func      = $form->process("func");
     
-	my (%var, $content, $title, $synopsis);
-	my $i18n = WebGUI::International->new($session);
-
+    my (%var, $content, $title, $synopsis);
+    my $i18n = WebGUI::International->new($session);
 
     my $className = $form->process("class","className") || $self->get('className');
 	if ($func eq "add" || ($func eq "editSave" && $form->process("assetId") eq "new")) { # new post
@@ -1574,6 +1658,7 @@ sub www_edit {
     $var{'archive.form'} = WebGUI::Form::yesNo($session, {
         name=>"archive"
     });
+    $var{'isSubscribedToCs'} = $self->getThread->getParent->isSubscribed;
 	$var{'form.header'} .= WebGUI::Form::hidden($session, {
         name=>"proceed", 
         value=>"showConfirmation"
@@ -1619,8 +1704,12 @@ sub www_edit {
 			});
 		$var{'userDefined'.$x.'.form.htmlarea'} 
             = WebGUI::Form::HTMLArea($session, {
-			    name    => "userDefined".$x,
-			    value   => $userDefinedValue,
+			    name       =>  "userDefined".$x,
+			    value      =>  $userDefinedValue,
+                richEditId => ($self->isa("WebGUI::Asset::Post::Thread")
+                               ? $self->getThread->getParent->get("richEditor")
+                               : $self->getThread->getParent->get("replyRichEditor")
+                              ),
 			});
 		$var{'userDefined'.$x.'.form.float'} 
             = WebGUI::Form::Float($session, {
@@ -1664,7 +1753,12 @@ sub www_edit {
         });
     }
 	$var{'form.submit'} = WebGUI::Form::submit($session, {
-        extras=>"onclick=\"this.value='".$i18n->get(452)."'; this.form.func.value='editSave';return true;\""
+	    extras=>"onclick=\"this.value='".$i18n->get(452)."'; this.form.func.value='editSave';return true;\""
+	});
+	$var{'form.cancel'} = WebGUI::Form::button( $session, {
+	    name        => "cancel",
+	    value       => $i18n->get("cancel"),
+	    extras      => 'onclick="history.go(-1)"',
 	});
 	$var{'karmaScale.form'} = WebGUI::Form::integer($session, {
         name=>"karmaScale",
@@ -1673,7 +1767,7 @@ sub www_edit {
     });
 	$var{karmaIsEnabled} = $session->setting->get("useKarma");
 	$var{'form.preview'} = WebGUI::Form::submit($session, {
-        value=>$i18n->get("preview","Asset_Collaboration")
+	    value=>$i18n->get("preview","Asset_Collaboration")
     });
 	my $numberOfAttachments = $self->getThread->getParent->getValue("attachmentsPerPost");
 	$var{'attachment.form'} = WebGUI::Form::image($session, {
@@ -1686,6 +1780,10 @@ sub www_edit {
     $var{'contentType.form'} = WebGUI::Form::contentType($session, {
         name=>'contentType',
         value=>$self->getValue("contentType") || "mixed",
+    });
+    $var{'skipNotification.form'} = WebGUI::Form::yesNo($session, {
+        name=>'skip_notification',
+        value=>$form->get("skip_notification",'yesNo') || 0,
     });
     if ($session->setting->get("metaDataEnabled")
      && $self->getThread->getParent->get('enablePostMetaData')) {
@@ -1704,6 +1802,7 @@ sub www_edit {
                 name      => "metadata_".$meta->{$field}{fieldId},
                 uiLevel   => 5,
                 value     => $meta->{$field}{value},
+                defaultValue => $meta->{$field}{defaultValue},
                 extras    => qq/title="$meta->{$field}{description}"/,
                 options   => $options,
                 fieldType => $fieldType,
@@ -1762,7 +1861,7 @@ sub www_editSave {
             }
         }
     }
-    my $output = $self->SUPER::www_editSave();
+    my $output = $self->next::method();
     if ($currentTag) { # Go back to our original tag
         $currentTag->setWorking;
     }

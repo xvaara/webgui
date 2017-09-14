@@ -25,11 +25,12 @@ use WebGUI::Asset::File::GalleryFile::Photo;
 my $session         = WebGUI::Test->session;
 my $node            = WebGUI::Asset->getImportNode($session);
 my $versionTag      = WebGUI::VersionTag->getWorking($session);
+WebGUI::Test->addToCleanup($versionTag);
 $versionTag->set({name=>"Photo Test"});
 my $gallery
     = $node->addChild({
         className           => "WebGUI::Asset::Wobject::Gallery",
-        imageResolutions    => "1024x768",
+        imageResolutions    => "1024",
     });
 my $album
     = $gallery->addChild({
@@ -61,7 +62,7 @@ $photo->setFile( WebGUI::Test->getTestCollateralPath('page_title.jpg') );
 my $storage = $photo->getStorageLocation;
 
 cmp_deeply(
-    $storage->getFiles, bag('page_title.jpg','1024x768.jpg'),
+    $storage->getFiles, bag('page_title.jpg','1024.jpg'),
     "Storage location contains the resolution file",
 );
 
@@ -70,10 +71,4 @@ ok(
     "Generated resolution file exists on the filesystem",
 );
 
-
-#----------------------------------------------------------------------------
-# Cleanup
-END {
-    $versionTag->rollback();
-}
-
+#vim:ft=perl

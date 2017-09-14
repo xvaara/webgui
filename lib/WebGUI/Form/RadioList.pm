@@ -110,19 +110,6 @@ sub getDefaultValue {
 
 #-------------------------------------------------------------------
 
-=head2 getOriginalValue( [ value ] )
-
-See WebGUI::Form::Control::getOriginalValue()
-
-=cut
-
-sub getOriginalValue{
-	my $self = shift;
-    return $self->WebGUI::Form::Control::getOriginalValue(@_);
-}
-
-#-------------------------------------------------------------------
-
 =head2 isDynamicCompatible ( )
 
 A class method that returns a boolean indicating whether this control is compatible with the DynamicField control.
@@ -154,13 +141,14 @@ sub toHtml {
             $checked = 1;
         }
         $output .= WebGUI::Form::Radio->new($self->session, {
-            name=>$self->get('name'),
-            value=>$key,
-            extras=>$self->get('extras'),
-            checked=>$checked,
-            id=>$self->get('name').$i
+            name    => $self->get('name'),
+            value   => $key,
+            extras  => $self->get('extras'),
+            checked => $checked,
+            id      => $self->get('name').$i,
+            label   => $options->{$key},
             })->toHtml;
-        $output .= '<label for="'.$self->get('name').$i.'">'.$options->{$key}."</label>" . $alignment;
+        $output .= $alignment;
     }
     $output .= "</fieldset>";
     return $output;

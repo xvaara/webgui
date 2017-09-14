@@ -19,6 +19,7 @@ use lib "$FindBin::Bin/../lib";
 use Test::More;
 use WebGUI::Test; # Must use this before any other WebGUI modules
 use WebGUI::Session;
+use WebGUI::Macro::FilePump;
 
 #----------------------------------------------------------------------------
 # Init
@@ -28,20 +29,13 @@ my $session         = WebGUI::Test->session;
 #----------------------------------------------------------------------------
 # Tests
 
-my  $tests =  11;
-plan tests => 1 + $tests;
+plan tests => 11;
 
 #----------------------------------------------------------------------------
 # put your tests here
 
-my $macro = 'WebGUI::Macro::FilePump';
-my $loaded = use_ok($macro);
-
 my $bundle = WebGUI::FilePump::Bundle->create($session, { bundleName => 'test bundle'});
-
-SKIP: {
-
-skip "Unable to load $macro", $tests unless $loaded;
+WebGUI::Test->addToCleanup( sub { $bundle->delete } );
 
 my $root = WebGUI::Asset->getRoot($session);
 
@@ -61,14 +55,14 @@ $fileAsset->getStorageLocation->addFileFromScalar('pumpfile.css', qq|   body {\n
 is($fileAsset->getStorageLocation->getFileContentsAsScalar($fileAsset->get('filename')), qq|   body {\npadding:   0px;}\n\n|, 'Sanity check - got back expected file contents');
 
 my $snippetTag = WebGUI::VersionTag->getWorking($session);
-WebGUI::Test->tagsToRollback($snippetTag);
+WebGUI::Test->addToCleanup($snippetTag);
 $snippetTag->commit;
 
 ok($bundle->addFile('JS',  'asset://filePumpSnippet'), 'Added filePumpSnippet');
 ok($bundle->addFile('CSS', 'asset://filePumpFileAsset'), 'Added filePumpAsset');
 
 my $storedFile = WebGUI::Storage->create($session);
-WebGUI::Test->storagesToDelete($storedFile);
+WebGUI::Test->addToCleanup($storedFile);
 $storedFile->addFileFromScalar('storedJS.js', qq|function helloWorld() { alert("Hellow world");}|, );
 # Turn into file:uploads/path/to/fileAsset (bc file uris must begin with either file:uploads/ or file:extras/)
 my $path = Path::Class::File->new($storedFile->getPath($storedFile->get('filename')));
@@ -90,7 +84,7 @@ is(
 );
 is(
     WebGUI::Macro::FilePump::process($session, 'test bundle', 'CSS'),
-    sprintf(qq|<link rel="stylesheet" type="text/css" href="%s" >\n|,
+    sprintf(qq|<link rel="stylesheet" type="text/css" href="%s"  />\n|,
         join('/', $uploadsURL, 'filepump', $bundle->bundleUrl . '.'. $bundle->get('lastBuild'), $bundle->bundleUrl.'.css'),
     ),
     '... check CSS file, normal mode'
@@ -111,7 +105,7 @@ is(
 );
 is(
     WebGUI::Macro::FilePump::process($session, 'test bundle', 'CSS'),
-    sprintf(qq|<link rel="stylesheet" type="text/css" href="/filePumpFileAsset" >\n|, $fileAsset->getUrl),
+    sprintf(qq|<link rel="stylesheet" type="text/css" href="/filePumpFileAsset"  />\n|, $fileAsset->getUrl),
     '... check CSS file, normal mode'
 );
 is(
@@ -121,14 +115,4 @@ is(
 );
 
 
-}
-
-
-#----------------------------------------------------------------------------
-# Cleanup
-END {
-
-$bundle->delete;
-
-}
 #vim:ft=perl

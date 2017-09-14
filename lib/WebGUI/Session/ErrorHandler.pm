@@ -17,6 +17,7 @@ package WebGUI::Session::ErrorHandler;
 
 use strict;
 use Log::Log4perl;
+use Scalar::Util qw( weaken );
 #use Apache2::RequestUtil;
 use JSON;
 use HTML::Entities qw(encode_entities);
@@ -161,6 +162,7 @@ The message you wish to add to the log.
 
 sub debug {
 	my $self = shift;
+        return unless $self->canShowDebug || $self->getLogger->is_debug;
 	my $message = shift;
     local $Log::Log4perl::caller_depth = $Log::Log4perl::caller_depth + 1;
 	$self->getLogger->debug($message);
@@ -197,6 +199,7 @@ The message you wish to add to the log.
 
 sub error {
 	my $self = shift;
+        return unless $self->canShowDebug || $self->getLogger->is_error;
 	my $message = shift;
     local $Log::Log4perl::caller_depth = $Log::Log4perl::caller_depth + 1;
 	$self->getLogger->error($message);
@@ -232,6 +235,7 @@ sub fatal {
 	if (! defined $self->session->db(1)) {
 		# We can't even _determine_ whether we can show the debug text.  Punt.
 		$self->session->output->print("<h1>Fatal Internal Error</h1>");
+		$self->session->output->print("<p>".$message."</p>");
 	} 
 	elsif ($self->canShowDebug()) {
 		$self->session->output->print("<h1>WebGUI Fatal Error</h1><p>Something unexpected happened that caused this system to fault.</p>\n",1);
@@ -302,6 +306,7 @@ The message you wish to add to the log.
 
 sub info {
 	my $self = shift;
+        return unless $self->canShowDebug || $self->getLogger->is_info;
 	my $message = shift;
     local $Log::Log4perl::caller_depth = $Log::Log4perl::caller_depth + 1;
 	$self->getLogger->info($message);
@@ -325,7 +330,9 @@ sub new {
 	my $session = shift;
     Log::Log4perl->init_once( $session->config->getWebguiRoot."/etc/log.conf" );   
 	my $logger = Log::Log4perl->get_logger($session->config->getFilename);
-	bless {_queryCount=>0, _logger=>$logger, _session=>$session}, $class;
+	my $self = bless {_queryCount=>0, _logger=>$logger, _session=>$session}, $class;
+        weaken( $self->{_session} );
+        return $self;
 }
 
 #----------------------------------------------------------------------------
@@ -470,6 +477,7 @@ The message you wish to add to the log.
 
 sub warn {
 	my $self = shift;
+        return unless $self->canShowDebug || $self->getLogger->is_warn;
 	my $message = shift;
     local $Log::Log4perl::caller_depth = $Log::Log4perl::caller_depth + 1;
 	$self->getLogger->warn($message);

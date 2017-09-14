@@ -35,7 +35,7 @@ $square->setBackgroundColor('#0000FF');
 
 ##Create a storage location
 my $storage = WebGUI::Storage->create($session);
-WebGUI::Test->storagesToDelete($storage);
+WebGUI::Test->addToCleanup($storage);
 
 ##Save the image to the location
 $square->saveToStorageLocation($storage, 'square.png');
@@ -68,6 +68,7 @@ $asset->update({
 $asset->generateThumbnail();
 
 $versionTag->commit;
+addToCleanup($versionTag);
 
 
 ##Call the Thumbnail Macro with that Asset's URL and see if it returns
@@ -94,11 +95,4 @@ SKIP: {
     cmp_bag([$thumbImg->GetPixels(width=>1, height=>1, x=>75, y=>75, map=>'RGB', normalize=>'true')], [0,0,1], 'blue pixel #2');
     cmp_bag([$thumbImg->GetPixels(width=>1, height=>1, x=>50, y=>50, map=>'RGB', normalize=>'true')], [0,0,1], 'blue pixel #3');
 
-}
-
-END {
-	if (defined $versionTag and ref $versionTag eq 'WebGUI::VersionTag') {
-		$versionTag->rollback;
-	}
-	##Storage is cleaned up by rolling back the version tag
 }

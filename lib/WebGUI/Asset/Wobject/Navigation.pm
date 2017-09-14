@@ -37,7 +37,7 @@ sub definition {
             templateId => {
                 label        => $i18n->get(1096),
                 fieldType    => "template",
-                defaultValue => 'PBtmpl0000000000000048'
+                defaultValue => 'PBnav00000000000bullet',
             },
             mimeType => {
                 label        => $i18n->get('mimeType'),
@@ -281,20 +281,6 @@ sub getEditForm {
 		".($ancestorsChecked ? "" : "toggleAncestorEndPoint();")."
 		//]]>
 		</script>");
-	my $previewButton;# = qq{
-                          # <INPUT TYPE="button" VALUE="Preview" NAME="preview"
-                          #  OnClick="
-                          #      window.open('', 'navPreview', 'toolbar=no,status=no,location=no,scrollbars=yes,resizable=yes');
-                          #      this.form.func.value='preview';
-                          #      this.form.target = 'navPreview';
-                          #      this.form.submit()">};
-	my $saveButton = ' <input type="button" class="forwardButton" value="'.$i18n->get(62,'WebGUI').'" onclick="
-		this.value=\''.$i18n->get(452,'WebGUI').'\';
-		this.form.func.value=\'editSave\';
-		this.form.target=\'_self\';
-		this.form.submit();
-		" />';
-	$tabform->{_submit} = $previewButton." ".$saveButton;
 	return $tabform;
 }
 
@@ -386,13 +372,29 @@ sub view {
 	# we've got to determine what our start point is based upon user conditions
 	my $start;
 	$self->session->asset(WebGUI::Asset->newByUrl($self->session)) unless ($self->session->asset);
-	my $current = $self->session->asset;
 
+	my $var = {'page_loop' => []};
+
+	my $current = $self->session->asset;
     # no current asset is set
     unless (defined $current) {
         $current = WebGUI::Asset->getDefault($self->session);
     }
 
+	my @interestingProperties = ('assetId', 'parentId', 'ownerUserId', 'synopsis', 'newWindow');
+    # Add properties from current asset
+    foreach my $property (@interestingProperties) {
+		$var->{'currentPage.'.$property} = $current->get($property);
+	}
+	$var->{'currentPage.menuTitle'} = $current->getMenuTitle;
+	$var->{'currentPage.title'}     = $current->getTitle;
+	$var->{'currentPage.isHome'} = ($current->getId eq $self->session->setting->get("defaultPage"));
+	$var->{'currentPage.url'} = $current->getUrl;
+    	$var->{'currentPage.hasChild'} = $current->hasChildren;
+    	$var->{'currentPage.rank'} = $current->getRank;
+    	$var->{'currentPage.rankIs'.$current->getRank} = 1;
+
+    # Build the asset tree
 	if ($self->get("startType") eq "specificUrl") {
 		$start = WebGUI::Asset->newByUrl($self->session,$self->get("startPoint"));
 	} elsif ($self->get("startType") eq "relativeToRoot") {
@@ -406,24 +408,11 @@ sub view {
 	my @includedRelationships = split("\n",$self->get("assetsToInclude"));
 
 	my %rules;
-	$rules{returnObjects} = 1;
 	$rules{endingLineageLength} = $start->getLineageLength+$self->get("descendantEndPoint");
 	$rules{assetToPedigree} = $current if (isIn("pedigree",@includedRelationships));
 	$rules{ancestorLimit} = $self->get("ancestorEndPoint");
 	$rules{orderByClause} = 'rpad(asset.lineage, 255, 9) desc' if ($self->get('reversePageLoop'));
-	my @interestingProperties = ('assetId', 'parentId', 'ownerUserId', 'synopsis', 'newWindow');
-	my $assets = $start->getLineage(\@includedRelationships,\%rules);	
-	my $var = {'page_loop' => []};
-    foreach my $property (@interestingProperties) {
-		$var->{'currentPage.'.$property} = $current->get($property);
-	}
-	$var->{'currentPage.menuTitle'} = $current->getMenuTitle;
-	$var->{'currentPage.title'}     = $current->getTitle;
-	$var->{'currentPage.isHome'} = ($current->getId eq $self->session->setting->get("defaultPage"));
-	$var->{'currentPage.url'} = $current->getUrl;
-    	$var->{'currentPage.hasChild'} = $current->hasChildren;
-    	$var->{'currentPage.rank'} = $current->getRank;
-    	$var->{'currentPage.rankIs'.$current->getRank} = 1;
+	my $assetIter = $start->getLineageIterator(\@includedRelationships,\%rules);	
 	my $currentLineage = $current->get("lineage");
 	my $lineageToSkip = "noskip";
 	my $absoluteDepthOfLastPage;
@@ -431,7 +420,14 @@ sub view {
 	my %lastChildren;
 	my $previousPageData = undef;
 	my $eh = $self->session->errorHandler;
-	foreach my $asset (@{$assets}) {
+        while ( 1 ) {
+            my $asset;
+            eval { $asset = $assetIter->() };
+            if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+                $self->session->log->error($x->full_message);
+                next;
+            }
+            last unless $asset;
 
 		# skip pages we shouldn't see
 		my $pageLineage = $asset->get("lineage");

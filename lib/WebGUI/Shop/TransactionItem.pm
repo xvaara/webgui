@@ -145,15 +145,20 @@ sub getSku {
 
 =head2 issueCredit ( )
 
-Returns the money from this item to the user in the form of in-store credit.
+Returns the money from this item to the user in the form of in-store credit.  Items marked
+cancelled cannot be refunded.
 
 =cut
 
 sub issueCredit {
     my $self = shift;
+    return if $self->get('orderStatus') eq 'Cancelled';
+    return unless $self->transaction->isSuccessful;
     my $credit = WebGUI::Shop::Credit->new($self->transaction->session, $self->transaction->get('userId'));
     $credit->adjust(($self->get('price') * $self->get('quantity')), "Issued credit on sku ".$self->get('assetId')." for transaction item ".$self->getId." on transaction ".$self->transaction->getId);
-    $self->getSku->onRefund($self);
+    if (my $sku = eval {$self->getSku}) {
+        $sku->onRefund($self);
+    }
     $self->update({orderStatus=>'Cancelled'});
 }
 
@@ -249,8 +254,8 @@ A hash reference that contains one of the following:
 
 A reference to a WebGUI::Shop::CartItem. Alternatively you can manually pass in any of the following
 fields that would be created automatically by this object: assetId configuredTitle options shippingAddressId
-shippingName shippingAddress1 shippingAddress2 shippingAddress3 shippingCity shippingState shippingCountry
-shippingCode shippingPhoneNumber quantity price vendorId
+shippingName shippingAddress1 shippingOrganization shippingAddress2 shippingAddress3 shippingCity shippingState
+shippingCountry shippingCode shippingPhoneNumber quantity price vendorId
 
 =head4 shippingTrackingNumber
 
@@ -265,7 +270,8 @@ The status of this item. The default is 'NotShipped'. Other statuses include: Ca
 sub update {
     my ($self, $newProperties) = @_;
     my $id          = id $self;
-    my $session     = $self->transaction->session;
+    my $transaction = $self->transaction;
+    my $session     = $transaction->session;
     my $taxDriver   = WebGUI::Shop::Tax->getDriver( $session );
 
     if (exists $newProperties->{item}) {
@@ -281,7 +287,8 @@ sub update {
 
         my $address = $item->getShippingAddress;
         $newProperties->{ shippingAddressId     } = $address->getId;
-        $newProperties->{ shippingAddressName   } = $address->get('name');
+        $newProperties->{ shippingAddressName   } = join ' ', $address->get('firstName'), $address->get('lastName');
+        $newProperties->{ shippingOrganization  } = $address->get('organization');
         $newProperties->{ shippingAddress1      } = $address->get('address1');
         $newProperties->{ shippingAddress2      } = $address->get('address2');
         $newProperties->{ shippingAddress3      } = $address->get('address3');
@@ -296,21 +303,21 @@ sub update {
         $newProperties->{ taxConfiguration      } = 
             to_json( $taxDriver->getTransactionTaxData( $sku, $address ) || '{}' );
 
-        unless ($sku->isShippingRequired) {
+        if (!$sku->isShippingRequired && $transaction->get('isSuccessful')) {
             $newProperties->{orderStatus} = 'Shipped';
         }
     }
     my @fields = (qw(assetId configuredTitle options shippingAddressId shippingTrackingNumber orderStatus
         shippingName shippingAddress1 shippingAddress2 shippingAddress3 shippingCity shippingState
         shippingCountry shippingCode shippingPhoneNumber quantity price vendorId 
-        vendorPayoutStatus vendorPayoutAmount taxRate taxConfiguration));
+        vendorPayoutStatus vendorPayoutAmount taxRate taxConfiguration shippingOrganization));
     foreach my $field (@fields) {
         $properties{$id}{$field} = (exists $newProperties->{$field}) ? $newProperties->{$field} : $properties{$id}{$field};
     }
     if (exists $newProperties->{options} && ref($newProperties->{options}) eq "HASH") {
         $properties{$id}{options} = JSON->new->encode($newProperties->{options});
     }
-    $properties{$id}{lastUpdated} = WebGUI::DateTime->new($self->transaction->session,time())->toDatabase;
+    $properties{$id}{lastUpdated} = WebGUI::DateTime->new($session,time())->toDatabase;
     $self->transaction->session->db->setRow("transactionItem","itemId",$properties{$id});
 }
 

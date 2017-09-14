@@ -237,6 +237,12 @@ sub editSettingsForm {
         hoverHelp    => $i18n->get('send inbox notifications only help'),
         defaultValue => $setting->get('sendInboxNotificationsOnly'),
     );
+    $f->yesNo(
+        name         => 'sendRejectNotice',
+        label        => $i18n->get('send reject notice'),
+        hoverHelp    => $i18n->get('send reject notice help'),
+        defaultValue => $setting->get('sendRejectNotice'),
+    );
     $f->text(
         name         => 'inboxNotificationsSubject',
         label        => $i18n->get('inbox notifications subject'),
@@ -305,6 +311,7 @@ sub editSettingsFormSave {
     $setting->set("inboxNotificationsSubject",         $form->process("inboxNotificationsSubject", "text"));
     $setting->set("inboxNotificationTemplateId",       $form->process("inboxNotificationTemplateId","template"));
     $setting->set("inboxSmsNotificationTemplateId",    $form->process("inboxSmsNotificationTemplateId","template"));
+    $setting->set("sendRejectNotice",                  $form->process("sendRejectNotice","yesNo"));
 }
 
 
@@ -336,7 +343,7 @@ sub getInboxNotificationTemplateId {
 
 #-------------------------------------------------------------------
 
-=head2 getInboxSMSNotificationTemplateId ( )
+=head2 getInboxSmsNotificationTemplateId ( )
 
 This method returns the template ID for inbox SMS notifications.
 
@@ -604,7 +611,7 @@ sub www_approveDenyInvitations {
         next unless ($invite->{inviterId}); #Not sure how this could ever happen, but check for it
         next unless ($session->user->userId eq $invite->{friendId});  #Protect against malicious stuff
         if($deny) {
-            $friends->rejectAddRequest($inviteId);
+            $friends->rejectAddRequest($inviteId,$session->setting->get("sendRejectNotice"));
         }
         elsif($approve) {
             $friends->approveAddRequest($inviteId);
@@ -680,8 +687,9 @@ sub www_deleteMessages {
 
     my @messages = $session->form->process("message","checkList");
 
-    foreach my $messageId (@messages) {
+    MESSAGE: foreach my $messageId (@messages) {
         my $message = WebGUI::Inbox::Message->new($session, $messageId);
+        next MESSAGE unless $message;
         $message->delete;
     }
 
@@ -931,7 +939,7 @@ sub www_inviteUserSave {
         ##Create the invitation url for each individual invitation
         my $inviteId = $session->id->generate();
         $var->{'url'}
-            = $session->url->append( $session->url->getSiteURL, 'op=auth;method=createAccount;code=' . $inviteId );
+            = $session->url->append( $session->url->getSiteURL . $session->url->gateway, 'op=auth;method=createAccount;code=' . $inviteId );
 
         ##Create the invitation record.
         my $now = WebGUI::DateTime->new( $session, DateTime->now->set_time_zone('UTC')->epoch )->toMysqlDate;
@@ -946,19 +954,20 @@ sub www_inviteUserSave {
         my $invitation = WebGUI::Mail::Send->create(
             $session, {
                 to      => $to,
-                from    => $email,
+                from    => $session->setting->get('companyEmail'),
+                replyTo => $email,
                 subject => $subject,
             }
         );
 
         ## No sneaky attack paths...
-        $var->{'message'} = WebGUI::HTML::html2text( WebGUI::HTML::filter($message) );
+        $var->{'message'} = WebGUI::HTML::format(WebGUI::HTML::filter($message));
 
         my $emailBody = $self->processTemplate( $var, $self->getInviteUserMessageTemplateId );
 
-        $invitation->addText($emailBody);
+        $invitation->addHtml($emailBody);
 
-        $invitation->send;
+        $invitation->queue;
 
     } ## end for my $inviteeEmail (@toList)
 
@@ -1357,7 +1366,7 @@ sub www_sendMessageSave {
                     fromUsername => $fromUser->username,
                     subject      => $messageProperties->{subject},
                     message      => $messageProperties->{message},
-                    inboxLink    => $session->url->append($session->url->getSiteURL, 'op=account;module=inbox'),
+                    inboxLink    => $session->url->append($session->url->getSiteURL . $session->url->gateway, 'op=account;module=inbox'),
                 };
                 ##Fill in template
                 my $output = $smsNotificationTemplate->process($var);
@@ -1390,7 +1399,7 @@ sub www_sendMessageSave {
                         fromUsername => $fromUser->username,
                         subject      => $messageProperties->{subject},
                         message      => $messageProperties->{message},
-                        inboxLink    => $session->url->append($session->url->getSiteURL, 'op=account;module=inbox'),
+                        inboxLink    => $session->url->append($session->url->getSiteURL . $session->url->gateway, 'op=account;module=inbox'),
                     };
                     ##Fill in template
                     my $output = $template->process($var);

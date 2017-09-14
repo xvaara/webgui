@@ -25,7 +25,7 @@ my $session = WebGUI::Test->session;
 
 my $homeAsset = WebGUI::Asset->getDefault($session);
 $session->asset($homeAsset);
-my ($versionTag, $template) = setupTest($session, $homeAsset);
+my $template = setupTest($session, $homeAsset);
 
 my $i18n = WebGUI::International->new($session, 'Macro_r_printable');
 
@@ -116,6 +116,7 @@ sub setupTest {
 	my $properties = {
 		title => 'printable test template',
 		className => 'WebGUI::Asset::Template',
+		parser    => 'WebGUI::Asset::Template::HTMLTemplate',
 		url => 'printable-test',
 		namespace => 'Macro/r_printable',
 		template => "HREF=<tmpl_var printable.url>\nLABEL=<tmpl_var printable.text>",
@@ -125,8 +126,9 @@ sub setupTest {
 	};
 	my $asset = $defaultNode->addChild($properties, $properties->{id});
 	$versionTag->commit;
+    addToCleanup($versionTag);
 
-	return $versionTag, $asset;
+	return $asset;
 }
 
 sub simpleHTMLParser {
@@ -143,14 +145,8 @@ sub simpleHTMLParser {
 sub simpleTextParser {
 	my ($text) = @_;
 
-	my ($url)   = $text =~ /HREF=(.+?)(LABEL|\Z)/;
-	my ($label) = $text =~ /LABEL=(.+?)(HREF|\Z)/;
+	my ($url)   = $text =~ /HREF=(.+?)(\n?LABEL|\Z)/;
+	my ($label) = $text =~ /LABEL=(.+?)(\n?HREF|\Z)/;
 
 	return ($url, $label);
-}
-
-END { ##Clean-up after yourself, always
-	if (defined $versionTag and ref $versionTag eq 'WebGUI::VersionTag') {
-		$versionTag->rollback;
-	}
 }

@@ -75,11 +75,10 @@ my @ipTests = (
 );
 
 
-plan tests => (151 + scalar(@scratchTests) + scalar(@ipTests)); # increment this value for each test you create
-
 my $session = WebGUI::Test->session;
 my $testCache = WebGUI::Cache->new($session, 'myTestKey');
 $testCache->flush;
+WebGUI::Test->addToCleanup(sub { $testCache->flush; });
 
 foreach my $gid ('new', '') {
 	my $g = WebGUI::Group->new($session, $gid);
@@ -104,6 +103,8 @@ foreach my $gid ('new', '') {
 
 	$g->delete;
 }
+
+is(WebGUI::Group->new($session, 'neverAGroupId'), undef, 'calling new with a non-existant groupId returns undef');
 
 my $g = WebGUI::Group->new($session, "new");
 
@@ -159,33 +160,6 @@ my $getGroupsIn = $optionGroup->getGroupsIn();
 cmp_deeply($getGroupsIn, [], 'new: noAdmin prevents the admin group from being added to this group');
 $optionGroup->delete;
 
-################################################################
-#
-# LDAP specific group properties
-# These tests have to be done on an isolated group that will NEVER
-# have getGroups called on it
-#
-################################################################
-
-my $lGroup = WebGUI::Group->new($session, 'new');
-
-$lGroup->ldapGroup('LDAP group');
-is($lGroup->ldapGroup(), 'LDAP group', 'ldapGroup set and fetched correctly');
-
-$lGroup->ldapGroupProperty('LDAP group property');
-is($lGroup->ldapGroupProperty(), 'LDAP group property', 'ldapGroup set and fetched correctly');
-
-$lGroup->ldapLinkId('LDAP link id');
-is($lGroup->ldapLinkId(), 'LDAP link id', 'ldapLinkId set and fetched correctly');
-
-$lGroup->ldapRecursiveProperty('LDAP recursive property');
-is($lGroup->ldapRecursiveProperty(), 'LDAP recursive property', 'ldapRecursiveProperty set and fetched correctly');
-
-$lGroup->ldapRecursiveFilter('LDAP recursive filter');
-is($lGroup->ldapRecursiveFilter(), 'LDAP recursive filter', 'ldapRecursiveFilter set and fetched correctly');
-
-$lGroup->delete;
-
 my $gid = $g->getId;
 is (length($gid), 22, "GroupId is proper length");
 
@@ -233,7 +207,7 @@ my $gB = WebGUI::Group->new($session, "new");
 $gA->name('Group A');
 $gB->name('Group B');
 ok( ($gA->name eq 'Group A' and $gB->name eq 'Group B'), 'object name assignment, multiple objects');
-WebGUI::Test->groupsToDelete($gA, $gB);
+WebGUI::Test->addToCleanup($gA, $gB);
 
 $gB->addGroups([$gA->getId]);
 
@@ -254,7 +228,7 @@ cmp_bag($gA->getGroupsIn(), [3], 'Not allowed to add myself to my group');
 my $gC = WebGUI::Group->new($session, "new");
 $gC->name('Group C');
 $gA->addGroups([$gC->getId]);
-WebGUI::Test->groupsToDelete($gC);
+WebGUI::Test->addToCleanup($gC);
 
 cmp_bag($gC->getGroupsFor(), [$gA->getId], 'Group A contains Group C');
 cmp_bag($gA->getGroupsIn(),  [$gC->getId, 3], 'Group C is a member of Group A, cached');
@@ -281,7 +255,7 @@ my $gZ = WebGUI::Group->new($session, "new");
 $gX->name('Group X');
 $gY->name('Group Y');
 $gZ->name('Group Z');
-WebGUI::Test->groupsToDelete($gX, $gY, $gZ);
+WebGUI::Test->addToCleanup($gX, $gY, $gZ);
 
 $gZ->addGroups([$gX->getId, $gY->getId]);
 
@@ -307,7 +281,7 @@ cmp_bag($gY->getAllGroupsFor(), [ map {$_->getId} ($gZ, $gA, $gB) ], 'getAllGrou
 cmp_bag($gZ->getAllGroupsFor(), [ map {$_->getId} ($gA, $gB) ], 'getAllGroupsFor Z');
 
 my $user = WebGUI::User->new($session, "new");
-WebGUI::Test->usersToDelete($user);
+WebGUI::Test->addToCleanup($user);
 $gX->userIsAdmin($user->userId, "yes");
 ok(!$gX->userIsAdmin($user->userId), "userIsAdmin: User who isn't secondary admin can't be group admin");
 isnt($gX->userIsAdmin($user->userId), 'yes', "userIsAdmin returns 1 or 0, not value");
@@ -366,13 +340,13 @@ $user->delete;
 ################################################################
 
 my @crowd = map { WebGUI::User->new($session, "new") } 0..7;
-WebGUI::Test->usersToDelete(@crowd);
+WebGUI::Test->addToCleanup(@crowd);
 my @mob;
 foreach my $idx (0..2) {
 	$mob[$idx] = WebGUI::User->new($session, "new");
 	$mob[$idx]->username("mob$idx");
 }
-WebGUI::Test->usersToDelete(@mob);
+WebGUI::Test->addToCleanup(@mob);
 
 my @bUsers = map { $_->userId } @crowd[0,1];
 my @aUsers = map { $_->userId } @crowd[2,3];
@@ -406,21 +380,22 @@ cmp_bag($everyUsers, $everyoneGroup->getUsers(), 'addUsers will not add a user t
 ##Check expire time override on addUsers
 
 my $expireOverrideGroup = WebGUI::Group->new($session, 'new');
-WebGUI::Test->groupsToDelete($expireOverrideGroup);
+WebGUI::Test->addToCleanup($expireOverrideGroup);
 $expireOverrideGroup->expireOffset('50');
 my $expireOverrideUser = WebGUI::User->create($session);
-WebGUI::Test->usersToDelete($expireOverrideUser);
+WebGUI::Test->addToCleanup($expireOverrideUser);
 $expireOverrideGroup->addUsers([$expireOverrideUser->userId], '5000');
 my $expirationDate = $session->db->quickScalar('select expireDate from groupings where userId=?', [$expireOverrideUser->userId]);
 cmp_ok($expirationDate-time(), '>', 50, 'checking expire offset override on addUsers');
 
 ################################################################
 #
-# getDatabaseUsers
+# getDatabaseUsers & hasDatabaseUsers
 #
 ################################################################
 
 $session->db->dbh->do('DROP TABLE IF EXISTS myUserTable');
+WebGUI::Test->addToCleanup(SQL => 'DROP TABLE IF EXISTS myUserTable');
 $session->db->dbh->do(q!CREATE TABLE myUserTable (userId CHAR(22) binary NOT NULL default '', PRIMARY KEY(userId)) TYPE=InnoDB!);
 
 my $sth = $session->db->prepare('INSERT INTO myUserTable VALUES(?)');
@@ -437,15 +412,6 @@ cmp_bag($mobUsers, [map {$_->userId} @mob], 'verify SQL table built correctly');
 is( $gY->databaseLinkId, 0, "Group Y's databaseLinkId is set to WebGUI");
 $gY->dbQuery(q!select userId from myUserTable!);
 is( $session->stow->get('isInGroup'), undef, 'setting dbQuery clears cached isInGroup');
-WebGUI::Cache->new($session, $gZ->getId)->delete();  ##Delete cached key for testing
-
-my @mobIds = map { $_->userId } @mob;
-
-cmp_bag(
-	$gY->getDatabaseUsers(),
-	\@mobIds,
-	'all mob users in list of group Y users from database'
-);
 
 is( $mob[0]->isInGroup($gY->getId), 1, 'mob[0] is in group Y after setting dbQuery');
 is( $mob[0]->isInGroup($gZ->getId), 1, 'mob[0] isInGroup Z');
@@ -455,12 +421,35 @@ ok( !isIn($mob[0]->userId, @{ $gZ->getUsers() }), 'mob[0] not in list of group Z
 
 ok( isIn($mob[0]->userId, @{ $gZ->getAllUsers() }), 'mob[0] in list of group Z users, recursively');
 
+WebGUI::Cache->new($session, $gY->getId)->delete();  ##Delete cached key for testing
+$session->stow->delete("isInGroup");
+
+my @mobIds = map { $_->userId } @mob;
+
+cmp_bag(
+	$gY->getDatabaseUsers(),
+	\@mobIds,
+	'all mob users in list of group Y users from database'
+);
+
+$session->db->write('delete from myUserTable where userId=?',[$mob[0]->getId]);
+my $inDb = $session->db->quickScalar("select count(*) from myUserTable where userId=?",[$mob[0]->getId]);
+ok ( !$inDb, 'mob[0] no longer in myUserTable');
+WebGUI::Cache->new($session, ["groupMembers",$gY->getId])->delete;  #Delete cache so we get a good test
+$session->stow->delete("isInGroup");                                #Delete stow so we get a good test
+
+is_deeply(
+	[ (map { $gY->hasDatabaseUser($_->getId) }  @mob) ],
+	[0, 1, 1],
+	'mob users 1,2 found in list of group Y users from database'
+);
+
 ##Karma tests
 
 my $gK = WebGUI::Group->new($session, "new");
 $gK->name('Group K');
 $gC->addGroups([$gK->getId]);
-WebGUI::Test->groupsToDelete($gK);
+WebGUI::Test->addToCleanup($gK);
 
 #      B
 #     / \
@@ -477,7 +466,7 @@ foreach my $idx (0..3) {
 	$chameleons[$idx] = WebGUI::User->new($session, "new");
 	$chameleons[$idx]->username("chameleon$idx");
 }
-WebGUI::Test->usersToDelete(@chameleons);
+WebGUI::Test->addToCleanup(@chameleons);
 
 foreach my $idx (0..3) {
 	$chameleons[$idx]->karma(5*$idx, 'testCode', 'testable karma, dude');
@@ -499,6 +488,12 @@ is_deeply(
 	'karma disabled in settings, no users in group'
 );
 
+is_deeply(
+	[ (map { $gK->hasKarmaUser($_->getId) }  @chameleons) ],
+	[0, 0, 0, 0],
+	'karma disabled in settings, group K has no users via karma threshold'
+);
+
 $session->setting->set('useKarma', 1);
 $gK->clearCaches; ##Clear cache since previous data is wrong
 
@@ -506,6 +501,12 @@ is_deeply(
 	[ (map { $_->isInGroup($gK->getId) }  @chameleons) ],
 	[0, 1, 1, 1],
 	'chameleons 1, 2 and 3 are in group K via karma threshold'
+);
+
+is_deeply(
+	[ (map { $gK->hasKarmaUser($_->getId) }  @chameleons) ],
+	[0, 1, 1, 1],
+	'group K has chameleons 1, 2 and 3 via karma threshold'
 );
 
 cmp_bag(
@@ -521,7 +522,7 @@ $session->setting->set('useKarma', $defaultKarmaSetting);
 my $gS = WebGUI::Group->new($session, "new");
 $gS->name('Group S');
 $gC->addGroups([$gS->getId]);
-WebGUI::Test->groupsToDelete($gS);
+WebGUI::Test->addToCleanup($gS);
 
 #        B
 #    	/ \
@@ -559,12 +560,24 @@ foreach my $idx (0..$#scratchTests) {
 		$sessionBank[$idx]->scratch->set($name, $value);
 	}
 }
-WebGUI::Test->usersToDelete(@itchies);
-WebGUI::Test->sessionsToDelete(@sessionBank);
+WebGUI::Test->addToCleanup(@itchies);
+WebGUI::Test->addToCleanup(@sessionBank);
 
+#isInGroup test
 foreach my $scratchTest (@scratchTests) {
-	is($scratchTest->{user}->isInGroup($gS->getId), $scratchTest->{expect}, $scratchTest->{comment});
+    is($scratchTest->{user}->isInGroup($gS->getId), $scratchTest->{expect}, $scratchTest->{comment});
 }
+
+WebGUI::Cache->new($session, $gS->getId)->delete();  ##Delete cached key for testing
+$session->stow->delete("isInGroup");
+
+#hasScratchUser test
+foreach my $idx (0..$#scratchTests) {
+    my $scratchTest = $scratchTests[$idx];
+    my $sessionId   = $sessionBank[$idx]->getId;
+	is($gS->hasScratchUser($scratchTest->{user}->getId, $sessionId), $scratchTest->{expect}, $scratchTest->{comment}." - hasScratchUser");
+}
+
 
 cmp_bag(
 	$gS->getScratchUsers,
@@ -577,6 +590,33 @@ cmp_bag(
 	[ ( (map { $_->{user}->userId() }  grep { $_->{expect} } @scratchTests), 3) ],
 	'getAllUsers for group with scratch'
 );
+
+{  ##Add scope to force cleanup
+
+    note "Checking for user Visitor session leak with scratch";
+
+    my $remoteSession = WebGUI::Test->newSession;
+    $remoteSession->user({userId => 1});
+    $remoteSession->scratch->set('remote','nok');
+
+    my $localScratchGroup = WebGUI::Group->new($session, 'new');
+    $localScratchGroup->name("Local IP Group");
+    $localScratchGroup->scratchFilter('local=ok');
+
+    ok !$remoteSession->user->isInGroup($localScratchGroup->getId), 'Remote Visitor fails to be in the scratch group';
+
+    my $localSession = WebGUI::Test->newSession;
+    WebGUI::Test->addToCleanup($localScratchGroup, $remoteSession, $localSession);
+    $localSession->user({userId => 1});
+    $localSession->scratch->set('local','ok');
+    $localScratchGroup->clearCaches;
+
+    ok $localSession->user->isInGroup($localScratchGroup->getId), 'Local Visitor is in the scratch group';
+
+    $remoteSession->stow->delete('isInGroup');
+    ok !$remoteSession->user->isInGroup($localScratchGroup->getId), 'Remote Visitor is not in the scratch group, even though a different Visitor passed';
+
+}
 
 @sessionBank = ();
 my @tcps =  ();
@@ -596,14 +636,15 @@ foreach my $idx (0..$#ipTests) {
 	##Name this user for convenience
 	$tcps[$idx]->username("tcp$idx");
 
-	##Assign this user to this test to be fetched later
-	$ipTests[$idx]->{user} = $tcps[$idx];
+    ##Assign this user and session to this test to be fetched later
+    $ipTests[$idx]->{user}    = $tcps[$idx];
+    $ipTests[$idx]->{session} = $sessionBank[$idx];
 }
-WebGUI::Test->usersToDelete(@tcps);
-WebGUI::Test->sessionsToDelete(@sessionBank);
+WebGUI::Test->addToCleanup(@tcps);
+WebGUI::Test->addToCleanup(@sessionBank);
 
 my $gI = WebGUI::Group->new($session, "new");
-WebGUI::Test->groupsToDelete($gI);
+WebGUI::Test->addToCleanup($gI);
 $gI->name('Group I');
 $gI->ipFilter('194.168.0.0/24');
 
@@ -619,28 +660,68 @@ cmp_bag(
 	'getUsers for group with IP filter'
 );
 
+is_deeply(
+	[ (map { $gI->hasIpUser($_->{user}->getId, $_->{session}->getId) }  @ipTests) ],
+	[ (map { $_->{expect} } @ipTests) ],
+	'hasIpUsers for group with IP filter'
+);
+
 foreach my $ipTest (@ipTests) {
 	is($ipTest->{user}->isInGroup($gI->getId), $ipTest->{expect}, $ipTest->{comment});
 }
 
+{  ##Add scope to force cleanup
+
+    note "Checking for user Visitor session leak via IP address";
+
+    $ENV{REMOTE_ADDR} = '191.168.1.1';
+    my $remoteSession = WebGUI::Test->newSession;
+    $remoteSession->user({userId => 1});
+
+    my $localIpGroup = WebGUI::Group->new($session, 'new');
+    $localIpGroup->name("Local IP Group");
+    $localIpGroup->ipFilter('192.168.33.0/24');
+
+    ok !$remoteSession->user->isInGroup($localIpGroup->getId), 'Remote Visitor fails to be in the group';
+
+    $ENV{REMOTE_ADDR} = '192.168.33.1';
+    my $localSession = WebGUI::Test->newSession;
+    WebGUI::Test->addToCleanup($localIpGroup, $remoteSession, $localSession);
+    $localSession->user({userId => 1});
+    $localIpGroup->clearCaches;
+
+    ok $localSession->user->isInGroup($localIpGroup->getId), 'Local Visitor is in the group';
+
+    $remoteSession->stow->delete('isInGroup');
+    $localIpGroup->clearCaches;
+    ok !$remoteSession->user->isInGroup($localIpGroup->getId), 'Remote Visitor is not in the group, even though a different Visitor passed';
+
+}
+
+
+
 ##Cache check.
 
 my $cacheDude = WebGUI::User->new($session, "new");
-WebGUI::Test->usersToDelete($cacheDude);
+WebGUI::Test->addToCleanup($cacheDude);
 $cacheDude->username('Cache Dude');
 
 $gY->addUsers([$cacheDude->userId]);
 
 ok( $cacheDude->isInGroup($gY->getId), "Cache dude added to group Y");
 ok( $cacheDude->isInGroup($gZ->getId), "Cache dude is a member of group Z by group membership");
+ok((grep $_ eq $gY->getId, @{ $cacheDude->getGroupIdsRecursive } ), 'Cache dude in Y by getGroupIdsRecursive');
 
-$gY->deleteUsers([$cacheDude->userId]);
+ok(eval { $gY->deleteUsers([$cacheDude->userId]); 1; }, "Y deleteUsers on Cache dude");
 
-ok( !$cacheDude->isInGroup($gY->getId), "Cache dude removed from group Y");
-ok( !$cacheDude->isInGroup($gZ->getId), "Cache dude removed from group Z too");
+ok((! grep $_ eq $gY->getId, @{ $cacheDude->getGroupIdsRecursive } ), 'Cache dude not in Y getGroupIdsRecursive');
+ok((! grep $_ eq $cacheDude->userId, @{ $gY->getAllUsers() } ), 'Cache dude not in Y getAllUsers');
+
+ok( !$cacheDude->isInGroup($gY->getId), "Cache dude removed from group Y by isInGroup");
+ok( !$cacheDude->isInGroup($gZ->getId), "Cache dude removed from group Z too by isInGroup");
 
 my $gCache = WebGUI::Group->new($session, "new");
-WebGUI::Test->groupsToDelete($gCache);
+WebGUI::Test->addToCleanup($gCache);
 
 $gCache->addUsers([$cacheDude->userId]);
 
@@ -682,7 +763,38 @@ ok(  WebGUI::Group->vitalGroup(3), '... 3');
 ok(  WebGUI::Group->vitalGroup('pbgroup000000000000015'), '... pbgroup000000000000015');
 ok(! WebGUI::Group->vitalGroup('27'), '... 27 is not vital');
 
-END {
-	$session->db->dbh->do('DROP TABLE IF EXISTS myUserTable');
-	$testCache->flush;
-}
+#----------------------------------------------------------------------------
+# getUsersNotIn
+
+# Normal group
+my $happyDude   = WebGUI::User->create( $session );
+$happyDude->username(" Happy Dude ");
+WebGUI::Test->addToCleanup( $happyDude );
+
+$gA->addUsers([ $happyDude->getId ]);
+$gB->addUsers([ $happyDude->getId ]);
+cmp_deeply(
+    $gA->getUsersNotIn( $gZ->getId ),
+    superbagof( $happyDude->getId ),
+    "get the users not in the group",
+);
+ok(
+    !grep( { $_ eq $happyDude->getId } @{$gA->getUsersNotIn( $gB->getId )}),
+    "don't get the users in both groups",
+);
+
+# Special-case Registered Users
+my $regUser = WebGUI::Group->new( $session, "2" );
+cmp_deeply(
+    $regUser->getUsersNotIn( $gZ->getId ),
+    superbagof( $happyDude->getId ),
+    "registered users: get the users not in the group",
+);
+ok(
+    !grep( { $_ eq $happyDude->getId } @{$regUser->getUsersNotIn( $gA->getId )}),
+    "registered users: don't get the users in both groups",
+);
+
+done_testing;
+
+#vim:ft=perl

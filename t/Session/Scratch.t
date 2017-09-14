@@ -15,7 +15,7 @@ use lib "$FindBin::Bin/../lib";
 use WebGUI::Test;
 use WebGUI::Session;
 
-use Test::More tests => 58; # increment this value for each test you create
+use Test::More tests => 62; # increment this value for each test you create
 use Test::Deep;
  
 my $session = WebGUI::Test->session;
@@ -55,6 +55,7 @@ for (my $count = 1; $count <= $maxCount; $count++){
 
 ##Creating a new session with the previous session's Id should clone the scratch data
 my $newSession = WebGUI::Session->open(WebGUI::Test->root, WebGUI::Test->file, undef, undef, $session->getId);
+WebGUI::Test->addToCleanup($newSession);
 
 is($newSession->getId, $session->getId, "Successful session duplication");
 
@@ -82,6 +83,8 @@ is($scratch->set('','value'), undef, 'set returns undef unless it gets a name ev
 ############################################
 
 my @sessionBank = map { WebGUI::Session->open(WebGUI::Test->root, WebGUI::Test->file) } 0..3;
+
+WebGUI::Test->addToCleanup(@sessionBank);
 
 ##Set variables to be deleted by name
 foreach my $i (0..3) {
@@ -117,14 +120,14 @@ is($sessionBank[0]->scratch->deleteNameByValue('',''), undef, 'deleteNameByValue
 is($sessionBank[3]->scratch->deleteNameByValue('falseValue','0'), 1, 'deleteNameByValue will delete values that are false (0)');
 is($sessionBank[2]->scratch->deleteNameByValue('falseValue',''), 1, "deleteNameByValue will delete values that are false ('')");
 
-END {
-	$session->scratch->deleteAll;
-	foreach my $wgSess ($newSession, @sessionBank) {
-		if (defined $wgSess and ref $wgSess eq 'WebGUI::Session') {
-            note "Closing session";
-			$wgSess->scratch->deleteAll;
-            $wgSess->var->end;
-			$wgSess->close;
-		}
-	}
-}
+$scratch->setLanguageOverride('English');
+is($scratch->getLanguageOverride, 'English', 'session scratch language is not correctly set');
+$scratch->removeLanguageOverride;
+is($scratch->getLanguageOverride, undef, 'The session scratch variable language is not removed');
+$scratch->setLanguageOverride('myimmaginarylanguagethatisnotinstalled');
+is($scratch->getLanguageOverride, undef, 'A non-existing language is set');
+$scratch->setLanguageOverride('English');
+$scratch->setLanguageOverride();
+is($scratch->getLanguageOverride, 'English', 'A empty string is falsely recognised as a language');
+
+#vim:ft=perl

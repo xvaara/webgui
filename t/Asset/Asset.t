@@ -63,15 +63,14 @@ $testGroups{'canEdit asset'}     = WebGUI::Group->new($session, 'new');
 $testUsers{'canEdit group user'} = WebGUI::User->new($session, 'new');
 $testUsers{'canEdit group user'}->addToGroups([$testGroups{'canEdit asset'}->getId]);
 $testUsers{'canEdit group user'}->username('Edit Group User');
-WebGUI::Test->groupsToDelete($testGroups{'canEdit asset'});
+addToCleanup($testGroups{'canEdit asset'});
 
 ##A group and user for groupIdEdit
 $testGroups{'canAdd asset'}     = WebGUI::Group->new($session, 'new');
 $testUsers{'canAdd group user'} = WebGUI::User->new($session, 'new');
 $testUsers{'canAdd group user'}->addToGroups([$testGroups{'canAdd asset'}->getId]);
 $testUsers{'canEdit group user'}->username('Can Add Group User');
-WebGUI::Test->groupsToDelete($testGroups{'canAdd asset'});
-WebGUI::Test->usersToDelete(values %testUsers);
+addToCleanup($testGroups{'canAdd asset'}, values %testUsers);
 
 my $canAddMaker = WebGUI::Test::Maker::Permission->new();
 $canAddMaker->prepare({
@@ -104,7 +103,7 @@ $properties = {
 };
 
 my $versionTag2 = WebGUI::VersionTag->getWorking($session);
-WebGUI::Test->tagsToRollback($versionTag2);
+addToCleanup($versionTag2);
 
 my $canEditAsset = $rootAsset->addChild($properties, $properties->{id});
 
@@ -120,7 +119,7 @@ $canEditMaker->prepare({
 });
 
 my $versionTag3 = WebGUI::VersionTag->getWorking($session);
-WebGUI::Test->tagsToRollback($versionTag3);
+addToCleanup($versionTag3);
 $properties = {
 	#            '1234567890123456789012'
 	id          => 'canViewAsset0000000010',
@@ -153,7 +152,27 @@ $canViewMaker->prepare(
     },
 );
 
-plan tests => 116 
+#### TestAsset class to test definition / update relationship
+BEGIN { $INC{ 'WebGUI/Asset/TestAsset.pm' } = __FILE__ }
+package WebGUI::Asset::TestAsset;
+
+our @ISA = ( 'WebGUI::Asset' );
+sub definition {
+    my ( $class, $session, $definition ) = @_;
+
+    # Alter assetData fields for testing purposes. Do not do 
+    # this in normal circumstances. Ever.
+    $definition = $class->SUPER::definition( $session, $definition );
+
+    # Make synopsis serialized
+    $definition->[0]->{properties}->{synopsis}->{serialize} = 1;
+
+    return $definition;
+}
+
+package main;
+
+plan tests => 138
             + scalar(@fixIdTests)
             + scalar(@fixTitleTests)
             + 2*scalar(@getTitleTests) #same tests used for getTitle and getMenuTitle
@@ -258,6 +277,40 @@ isa_ok($tempNode, 'WebGUI::Asset::Wobject::Folder');
 is($tempNode->getId, 'tempspace0000000000000', 'Tempspace Asset ID check');
 is($tempNode->getParent->getId, $rootAsset->getId, 'Tempspace parent is Root Asset');
 
+
+################################################################
+#
+# update
+#
+################################################################
+
+# Create a new TestAsset instance
+my $ta  = $importNode->addChild( { 
+                className       => 'WebGUI::Asset::TestAsset',
+} );
+isa_ok( $ta, 'WebGUI::Asset::TestAsset', 'addChild returns correct object' );
+
+ok(
+    eval { $ta->update({ synopsis => [ "one", "two" ] }); 1; },
+    'update() succeeds with ref on serialized property',
+);
+cmp_deeply(
+    $ta->get('synopsis'),
+    [ "one", "two" ],
+    "serialized property returns deserialized ref",
+);
+
+ok(
+    eval { $ta->update({ synopsis => '[ "two", "three" ]', }); 1; },
+    'update() succeeds with serialized string on serialized property',
+);
+cmp_deeply(
+    $ta->get('synopsis'),
+    [ "two", "three" ],
+    "serialized property returns deserialized ref",
+);
+$ta->purge;
+
 ################################################################
 #
 # urlExists
@@ -303,7 +356,7 @@ $session->{_request} = $origRequest;
 ################################################################
 
 my $versionTag = WebGUI::VersionTag->getWorking($session);
-WebGUI::Test->tagsToRollback($versionTag);
+addToCleanup($versionTag);
 $versionTag->set({name=>"Asset tests"});
 
 $properties = {
@@ -369,8 +422,9 @@ $versionTag->commit;
 
 $session->setting->set('urlExtension', undef);
 
-is($importNode->fixUrl('1234'.'-'x235 . 'abcdefghij'), '1234'.'-'x235 . 'abcdefghij', 'fixUrl leaves long URLs under 250 characters alone');
-is($importNode->fixUrl('1234'.'-'x250 . 'abcdefghij'), '1234'.'-'x216, 'fixUrl truncates long URLs over 250 characters to 220 characters');
+is($importNode->fixUrl('1234'.'_'x235 . 'abcdefghij'), '1234'.'_'x235 . 'abcdefghij', 'fixUrl leaves long URLs under 250 characters alone');
+is($importNode->fixUrl('1234'.'_'x250 . 'abcdefghij'), '1234'.'_'x216, 'fixUrl truncates long URLs over 250 characters to 220 characters');
+is $importNode->fixUrl('---'), '-', '... 3 dashes are collapsed down to a single dash';
 
 WebGUI::Test->originalConfig('extrasURL');
 WebGUI::Test->originalConfig('uploadsURL');
@@ -615,14 +669,6 @@ is($fixTitleAsset->getUiLevel, 8, 'getUiLevel: Snippet has a configured uiLevel 
 
 ################################################################
 #
-# isValidRssItem
-#
-################################################################
-
-is($canViewAsset->isValidRssItem, 1, 'isValidRssItem: By default, all Assets are valid RSS items');
-
-################################################################
-#
 # getEditTabs
 #
 ################################################################
@@ -708,9 +754,14 @@ isnt( $rootAsset->get('title'), $funkyTitle, 'get returns a safe copy of the Ass
 #
 ################################################################
 my $node = WebGUI::Asset->getRoot($session);
-my $product1 = $node->addChild({ className => 'WebGUI::Asset::Sku::Product'});
-my $product2 = $node->addChild({ className => 'WebGUI::Asset::Sku::Product'});
-my $product3 = $node->addChild({ className => 'WebGUI::Asset::Sku::Product'});
+my $product1 = $node->addChild({ className => 'WebGUI::Asset::Sku::Product'}, undef, undef, { skipAutoCommitWorkflows => 1});
+my $product2 = $node->addChild({ className => 'WebGUI::Asset::Sku::Product'}, undef, undef, { skipAutoCommitWorkflows => 1});
+my $product3 = $node->addChild({ className => 'WebGUI::Asset::Sku::Product'}, undef, undef, { skipAutoCommitWorkflows => 1});
+my $pTag = WebGUI::VersionTag->getWorking($session);
+$pTag->commit;
+addToCleanup($pTag);
+my $product4 = $node->addChild({ className => 'WebGUI::Asset::Sku::Product'}, undef, undef, { skipAutoCommitWorkflows => 1});
+addToCleanup($product4);
 
 my $getAProduct = WebGUI::Asset::Sku::Product->getIsa($session);
 isa_ok($getAProduct, 'CODE', 'getIsa returns a sub ref');
@@ -733,9 +784,17 @@ while( my $sku = $getASku->()) {
 is($counter, 3, 'getIsa: returned only 3 Products for a parent class');
 cmp_bag($skuIds, [$product1->getId, $product2->getId, $product3->getId], 'getIsa returned the correct 3 products for a parent class');
 
+my $getAnotherSku = WebGUI::Asset::Sku->getIsa($session, 0, { returnAll => 1, });
+$counter = 0;
+while( my $sku = $getAnotherSku->()) {
+    ++$counter;
+}
+is($counter, 4, 'getIsa: returned all 4 skus with returnAll => 1');
+
 $product1->purge;
 $product2->purge;
 $product3->purge;
+$product4->purge;
 
 ################################################################
 #
@@ -744,7 +803,7 @@ $product3->purge;
 ################################################################
 
 my $versionTag4 = WebGUI::VersionTag->getWorking($session);
-WebGUI::Test->tagsToRollback($versionTag4);
+addToCleanup($versionTag4);
 $versionTag4->set( { name => 'inheritUrlFromParent tests' } );
 
 $properties = {
@@ -890,7 +949,6 @@ $session->log->warn('parent asset is now committed');
 is( $testVersionTag->get('isCommitted'), 1, 'parent asset is now committed' );
 
 $childVersionTag = WebGUI::VersionTag->new( $session, $childAsset->get('tagId') );
-$session->log->warn('child asset is now committed');
 is( $childVersionTag->get('isCommitted'), 1, 'child asset is now committed' );
 
 ################################################################
@@ -901,11 +959,110 @@ is( $childVersionTag->get('isCommitted'), 1, 'child asset is now committed' );
 
 my $assetToCommit = $defaultAsset->addChild({ className => 'WebGUI::Asset::Snippet', title => 'Snippet to commit and clone from db', });
 my $cloneTag = WebGUI::VersionTag->getWorking($session);
-WebGUI::Test->tagsToRollback($cloneTag);
+addToCleanup($cloneTag);
 $cloneTag->commit;
 is($assetToCommit->get('status'), 'pending', 'cloneFromDb: local asset is still pending');
 $assetToCommit = $assetToCommit->cloneFromDb;
 is($assetToCommit->get('status'), 'approved', '... returns fresh, commited asset from the db');
+
+################################################################
+#
+# checkView
+#
+################################################################
+
+my $trashedAsset = $defaultAsset->addChild({
+    className => 'WebGUI::Asset::Snippet', title     => 'Trashy',
+});
+
+my $clippedAsset = $defaultAsset->addChild({
+    className => 'WebGUI::Asset::Snippet', title     => 'Clippy',
+});
+
+my $checkTag = WebGUI::VersionTag->getWorking($session);
+$checkTag->commit;
+addToCleanup($checkTag);
+$trashedAsset = $trashedAsset->cloneFromDb;
+$clippedAsset = $clippedAsset->cloneFromDb;
+$trashedAsset->trash;
+$clippedAsset->cut;
+is $trashedAsset->get('state'), 'trash',     'checkView setup: trashed an asset';
+is $clippedAsset->get('state'), 'clipboard', '... clipped an asset';
+
+$session->var->switchAdminOff;
+$session->http->setRedirectLocation('');
+$session->http->setStatus(200, 'OK');
+
+$trashedAsset->checkView();
+is $session->http->getStatus, 410, '... status set to 410 for trashed asset';
+is $session->http->getRedirectLocation, '', '... no redirect set';
+
+$session->http->setStatus(200, 'OK');
+$clippedAsset->checkView();
+is $session->http->getStatus, 410, '... status set to 410 for cut asset';
+is $session->http->getRedirectLocation, '', '... no redirect set';
+
+$session->var->switchAdminOn;
+$session->http->setStatus(200, 'OK');
+is $trashedAsset->checkView(), 'chunked', '... returns "chunked" when admin is on for trashed asset';
+is $session->http->getRedirectLocation, $trashedAsset->getUrl('func=manageTrash'), '... trashed asset sets redirect to manageTrash';
+
+$session->http->setRedirectLocation('');
+is $clippedAsset->checkView(), 'chunked', 'checkView: returns "chunked" when admin is on for cut asset';
+is $session->http->getRedirectLocation, $clippedAsset->getUrl('func=manageClipboard'), '... cut asset sets redirect to manageClipboard';
+
+################################################################
+#
+# Packed head tags
+#
+################################################################
+
+use HTML::Packer;
+my $asset   = WebGUI::Asset->getImportNode( $session )->addChild({
+    className       => 'WebGUI::Asset::Snippet',
+});
+addToCleanup( $asset );
+my $unpacked = qq{<title>
+                                                                             
+                                                                             
+this is my title
+</title>
+};
+my $packed = $unpacked;
+HTML::Packer::minify( \$packed, {
+    remove_newlines     => 1,
+    do_javascript       => "shrink",
+    do_stylesheet       => "minify",
+} );
+$asset->update({ extraHeadTags => $unpacked });
+is $asset->get('extraHeadTagsPacked'), $packed, 'extraHeadTagsPacked';
+$asset->update({ extraHeadTags => '' });
+ok !$asset->get('extraHeadTagsPacked'), 'extraHeadTagsPacked cleared';
+
+################################################################
+#
+# getContentLastModifiedBy
+#
+################################################################
+
+{
+    my $revised_user1 = WebGUI::User->new($session, 'new');
+    my $revised_user2 = WebGUI::User->new($session, 'new');
+    WebGUI::Test->addToCleanup($revised_user1, $revised_user2 );
+    $session->user({user => $revised_user1});
+    my $versionTag = WebGUI::VersionTag->getWorking($session);
+    my $asset   = WebGUI::Asset->getImportNode( $session )->addChild({
+        className       => 'WebGUI::Asset::Snippet',
+    }, undef, 12);
+    $versionTag->commit;
+    $asset = $asset->cloneFromDb;
+    WebGUI::Test->addToCleanup($asset, $versionTag);
+    is $asset->getContentLastModifiedBy, $asset->get('revisedBy'), 'getContentLastModifiedBy returns revisedBy for most assets';
+    is $asset->getContentLastModifiedBy, $revised_user1->userId, '... real userId check';
+    $session->user({user => $revised_user2});
+    $asset = $asset->addRevision({ title => 'titular', }, 14);
+    is $asset->getContentLastModifiedBy, $revised_user2->userId, '... check that a new revision tracks';
+}
 
 ##Return an array of hashrefs.  Each hashref describes a test
 ##for the fixId method.
@@ -1054,3 +1211,27 @@ sub getTitleTests {
     },
     );
 }
+
+subtest 'canAdd tolerates being called as an object method', sub {
+    my $class = 'WebGUI::Asset::Snippet';
+    my $snip = $tempNode->addChild({className => $class});
+    WebGUI::Test->addToCleanup($snip);
+
+    # Make a test user who's just in Turn Admin On
+    my $u = WebGUI::User->create($session);
+    WebGUI::Test->addToCleanup($u, $snip);
+    $u->addToGroups(['12']);
+    $session->user({ user => $u });
+
+    # default addGroup is Turn Admin On
+    ok $class->canAdd($session), 'can add when called as a class method';
+    ok $snip->canAdd($session), '...or an object method';
+
+    my $key = "assets/$class/addGroup";
+    WebGUI::Test->originalConfig($key);
+    $session->config->set($key, 3);
+
+    # now only admins can add snippets, so canAdd should return false
+    ok !$class->canAdd($session), 'Cannot add when called as a class method';
+    ok !$snip->canAdd($session), '...or an object method';
+};

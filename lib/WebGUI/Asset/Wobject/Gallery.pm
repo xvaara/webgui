@@ -13,12 +13,15 @@ package WebGUI::Asset::Wobject::Gallery;
 use strict;
 use Class::C3;
 use base qw(WebGUI::AssetAspect::RssFeed WebGUI::Asset::Wobject);
+
 use JSON;
 use Tie::IxHash;
+use WebGUI::HTML;
 use WebGUI::International;
+use WebGUI::Search;
 use WebGUI::Utility;
 use XML::Simple;
-use WebGUI::HTML;
+
 
 =head1 NAME
 
@@ -29,6 +32,8 @@ use WebGUI::HTML;
 =head1 DIAGNOSTICS
 
 =head1 METHODS
+
+=cut
 
 #-------------------------------------------------------------------
 
@@ -150,7 +155,7 @@ sub definition {
         templateIdAddArchive => {
             tab             => "display",
             fieldType       => "template",
-            defaultValue    => "i0X4Q3tBWUb_thsVbsYz9xQ",
+            defaultValue    => "0X4Q3tBWUb_thsVbsYz9xQ",
             namespace       => "GalleryAlbum/AddArchive",
             label           => $i18n->get("templateIdAddArchive label"),
             hoverHelp       => $i18n->get("templateIdAddArchive description"),
@@ -345,34 +350,6 @@ sub definition {
 
 #----------------------------------------------------------------------------
 
-=head2 addChild ( properties, [...] )
-
-Add a child to this asset. See C<WebGUI::AssetLineage> for more info.
-
-Overridden to ensure that only GalleryAlbums are added to Galleries.
-
-=cut
-
-sub addChild {
-    my $self        = shift;
-    my $properties  = shift;
-    my $albumClass  = "WebGUI::Asset::Wobject::GalleryAlbum";
-
-    # Load the class
-    WebGUI::Pluggable::load( $properties->{className} );
-
-    if ( !$properties->{className}->isa( $albumClass ) ) {
-        $self->session->errorHandler->security(
-            "add a ".$properties->{className}." to a ".$self->get("className")
-        );
-        return undef;
-    }
-
-    return $self->next::method( $properties, @_ );
-}
-
-#----------------------------------------------------------------------------
-
 =head2 appendTemplateVarsSearchForm ( var )
 
 Appends the template vars for the search form to the hash reference C<var>.
@@ -419,7 +396,13 @@ sub appendTemplateVarsSearchForm {
             name        => "keywords",
             value       => $form->get("keywords"),
         });
-
+        
+    $var->{ searchForm_location }
+        = WebGUI::Form::text( $session, {
+            name        => "location",
+            value       => $form->get("location"),
+        });
+        
     # Search classes
     tie my %searchClassOptions, 'Tie::IxHash', (
         'WebGUI::Asset::File::GalleryFile::Photo'   => $i18n->get("search class photo"),
@@ -761,11 +744,12 @@ sub getRssFeedItems {
             perpage     => $self->get('itemsPerFeed'),
         } );
     
-    my $var = [];
+    my $var     = [];
+    my $siteUrl = $self->session->url->getSiteURL();
     for my $assetId ( @{ $p->getPageData } ) {
         my $asset       = WebGUI::Asset::Wobject::GalleryAlbum->newPending( $self->session, $assetId );
         push @{ $var }, {
-            'link'          => $asset->getUrl,
+            'link'          => $siteUrl . $asset->getUrl,
             'guid'          => $asset->{_properties}->{ 'assetId' },
             'title'         => $asset->getTitle,
             'description'   => $asset->{_properties}->{ 'description' },
@@ -793,6 +777,7 @@ Other keys are valid, see C<WebGUI::Search::search()> for details.
 sub getSearchPaginator {
     my $self        = shift;
     my $rules       = shift;
+    my $session     = $self->session;
 
     $rules->{ lineage       } = [ $self->get("lineage") ];
 
@@ -943,17 +928,21 @@ sub hasSpaceAvailable {
     # Compile the amount of disk space used
     my $maxSpace    = $self->get( "maxSpacePerUser" ) * ( 1_024 ** 2 ); # maxSpacePerUser is in MB
     my $spaceUsed   = 0;
-    my $fileIds
-        = $self->getLineage( [ 'descendants' ], { 
+    my $fileIter
+        = $self->getLineageIterator( [ 'descendants' ], { 
             joinClass       => 'WebGUI::Asset::File::GalleryFile',
             whereClause     => 'ownerUserId = ' . $db->quote( $userId ),
         } );
 
-    for my $assetId ( @{ $fileIds } ) {
-        my $asset       = WebGUI::Asset->newByDynamicClass( $self->session, $assetId );
-        next unless $asset;
-        $spaceUsed += $asset->get( 'assetSize' );
-
+    while ( 1 ) {
+        my $file;
+        eval { $file = $fileIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $self->session->log->error($x->full_message);
+            next;
+        }
+        last unless $file;
+        $spaceUsed += $file->get( 'assetSize' );
         return 0 if ( $spaceUsed + $spaceWanted >= $maxSpace );
     }
 
@@ -1371,45 +1360,61 @@ sub www_listAlbumsService {
     return JSON->new->pretty->encode($document);
 }
 
+
 #----------------------------------------------------------------------------
 
-=head2 www_search ( )
+=head2 search ( )
 
-Search through the GalleryAlbums and files in this gallery. Show the form to
-search and display the results if necessary.
+Helper method for C<www_search> containing all the search logic. Executes a 
+search depending on search form parameters. Returns undef if no search was
+executed. Otherwise an array is returned containing the following elements:
+
+=head3 paginator
+
+A paginator object containing the search results.
+
+=head3 keywords
+
+Search keywords assembled from search form fields.
 
 =cut
 
-sub www_search {
+sub search {
     my $self        = shift;
     my $session     = $self->session;
     my $form        = $session->form;
     my $db          = $session->db;
+    my $columns;
 
-    my $var         = $self->getTemplateVars;
-    # NOTE: Search form is added as part of getTemplateVars()
-
-    # Get search results, if necessary.
+    # Check whether we have to do a search
     my $doSearch    
         = ( 
-            $form->get( 'basicSearch' ) || $form->get( 'keywords' )
-            || $form->get( 'title' ) || $form->get( 'description' )
-            || $form->get( 'userId' ) || $form->get( 'className' )
-            || $form->get( 'creationDate_after' ) || $form->get( 'creationDate_before' )
+            $form->get( 'basicSearch' )    || $form->get( 'keywords' ) 
+            || $form->get( 'location' )    || $form->get( 'title' ) 
+            || $form->get( 'description' ) || $form->get( 'userId' ) 
+            || $form->get( 'className' )   || $form->get( 'creationDate_after' ) 
+            || $form->get( 'creationDate_before' )
         );
 
-    if ( $doSearch ) {
-        # Keywords to search on
-        # Do not add a space to the
+    if ( $doSearch ) {       
+        # Keywords to search on.
         my $keywords;
-        FORMVAR: foreach my $formVar (qw/ basicSearch keywords title description /) {
+        FORMVAR: foreach my $formVar (qw/ basicSearch keywords location title description /) {
             my $var = $form->get($formVar);
             next FORMVAR unless $var;
             $keywords = join ' ', $keywords, $var;
         }
+        # Remove leading whitespace
+        $keywords =~ s/^\s+//;
 
         # Build a where clause from the advanced options
         # Lineage search can capture gallery
+        # Note that adding criteria to the where clause alone will not work. If
+        # you want to cover additional properties you need to make sure that 
+        # - the property is added to $keywords above
+        # - the property is included in index keywords by overriding the indexContent method of respective classes (usually Photo or GalleryFile)
+        # - the respective table is joined in (usually via joinClass parameter of getSearchPaginator)
+        # - the column containing the property is included in the query (usually via column parameter of getSearchPaginator)
         my $where       = q{assetIndex.assetId <> '} . $self->getId . q{'};
         if ( $form->get("title") ) {
             $where      .= q{ AND assetData.title LIKE } 
@@ -1421,11 +1426,18 @@ sub www_search {
                         . $db->quote( '%' . $form->get("description") . '%' ) 
                         ;
         }
+        if ( $form->get("location") && ( $form->get("className") eq 'WebGUI::Asset::File::GalleryFile::Photo' 
+            || $form->get("className") eq '' ) ) {
+            $where      .= q{ AND Photo.location LIKE }
+                        . $db->quote( '%' . $form->get("location") . '%' )
+                        ;
+            push (@{$columns}, 'Photo.location');
+        }                
         if ( $form->get("userId") ) {
             $where      .= q{ AND assetData.ownerUserId = }
                         . $db->quote( $form->get("userId") )
                         ;
-        }
+        }        
 
         my $oneYearAgo = WebGUI::DateTime->new( $session, time )->add( years => -1 )->epoch;
         my $dateAfter  = $form->get("creationDate_after", "dateTime", $oneYearAgo);
@@ -1439,45 +1451,76 @@ sub www_search {
         }
 
         # Classes
-        my $joinClass   = [
+        my $classes = [
             'WebGUI::Asset::Wobject::GalleryAlbum',
             'WebGUI::Asset::File::GalleryFile::Photo',
         ];
         if ( $form->get("className") ) {
-            $joinClass  = [ $form->get('className') ];
+            $classes = [ $form->get('className') ];
         }
-        $where      .= q{ AND assetIndex.className IN ( } . $db->quoteAndJoin( $joinClass ) . q{ ) };
         
-
         # Build a URL for the pagination
         my $url     
             = $self->getUrl( 
                 'func=search;'
                 . 'basicSearch=' . $form->get('basicSearch') . ';'
                 . 'keywords=' . $form->get('keywords') . ';'
+                . 'location=' . $form->get('location') . ';'
                 . 'title=' . $form->get('title') . ';'
                 . 'description=' . $form->get('description') . ';'
                 . 'creationDate_after=' . $dateAfter . ';'
                 . 'creationDate_before=' . $dateBefore . ';'
                 . 'userId=' . $form->get("userId") . ';'
             );
-        for my $class ( @$joinClass ) {
+        for my $class ( @$classes ) {
             $url    .= 'className=' . $class . ';';
         }
-
-        my $p
+        
+        my $paginator
             = $self->getSearchPaginator( { 
                 url             => $url,
                 keywords        => $keywords,
                 where           => $where,
-                joinClass       => $joinClass,
+                classes         => $classes,
+                joinClass       => $classes,                
+                columns         => $columns,
                 creationDate    => $creationDate,
-            } );
+            } );        
         
+        return ( $paginator, $keywords );
+    }
+    
+    # Return undef to indicate that no search was executed
+    return undef;
+}
+
+
+#----------------------------------------------------------------------------
+
+=head2 www_search ( )
+
+Search through the GalleryAlbums and files in this gallery. Show the form to
+search and display the results if necessary.
+
+=cut
+
+sub www_search {
+    my $self        = shift;
+    my $session     = $self->session;
+
+    my $var         = $self->getTemplateVars;
+    # NOTE: Search form is added as part of getTemplateVars()
+
+    # Execute search and retrieve search result paginator and keywords
+    my ( $paginator, $keywords ) = $self->search;
+    
+    if( $paginator ) {
+        # Provide search keywords as template variable
         $var->{ keywords }  = $keywords;
 
-        $p->appendTemplateVars( $var );
-        for my $result ( @{ $p->getPageData } ) {
+        # Add search results
+        $paginator->appendTemplateVars( $var );        
+        for my $result ( @{ $paginator->getPageData } ) {
             my $asset   = WebGUI::Asset->newByDynamicClass( $session, $result->{assetId} );
             push @{ $var->{search_results} }, {
                 %{ $asset->getTemplateVars },

@@ -148,6 +148,21 @@ sub getValueAsHtml {
 
 #-------------------------------------------------------------------
 
+=head2 headTags ( )
+
+Set the head tags for this form plugin
+
+=cut
+
+sub headTags {
+    my $self = shift;
+    $self->session->style->setScript($self->session->url->extras('textFix.js'),{ type=>'text/javascript' });
+    $self->{_richEdit} ||= WebGUI::Asset::RichEdit->new($self->session,$self->get("richEditId")); 
+    $self->{_richEdit}->richedit_headTags if $self->{_richEdit};
+}
+
+#-------------------------------------------------------------------
+
 =head2 isDynamicCompatible ( )
 
 A class method that returns a boolean indicating whether this control is compatible with the DynamicField control.
@@ -168,11 +183,15 @@ Renders an HTML area field.
 
 sub toHtml {
 	my $self = shift;
-	my $i18n = WebGUI::International->new($self->session);
-	my $richEdit = WebGUI::Asset::RichEdit->new($self->session,$self->get("richEditId"));
+    ##Do not display a rich editor on any mobile browser.
+    if ($self->session->style->mobileBrowser) {
+        return $self->SUPER::toHtml;
+    }
+    my $i18n = WebGUI::International->new($self->session);
+	my $richEdit = $self->{_richEdit};
+    $richEdit ||= WebGUI::Asset::RichEdit->new($self->session,$self->get("richEditId")); 
 	if (defined $richEdit) {
-       $self->session->style->setScript($self->session->url->extras('textFix.js'),{ type=>'text/javascript' });
-	   $self->set("extras", $self->get('extras') . ' onblur="fixChars(this.form.'.$self->get("name").')" mce_editable="true" ');
+	   $self->set("extras", $self->get('extras') . q{ onblur="fixChars(this.form['}.$self->get("name").q{'])" mce_editable="true" });
 	   $self->set("resizable", 0);
 	   return $self->SUPER::toHtml.$richEdit->getRichEditor($self->get('id'));
     } else {
@@ -208,13 +227,27 @@ JS
     my $output = '<div class="nav">';
     my $base = WebGUI::Asset->newByUrl($session) || WebGUI::Asset->getRoot($session);
     my @crumb;
-    my $ancestors = $base->getLineage(["self","ancestors"],{returnObjects=>1});
-    foreach my $ancestor (@{$ancestors}) {
+    my $ancestorIter = $base->getLineageIterator(["self","ancestors"]);
+    while ( 1 ) {
+        my $ancestor;
+        eval { $ancestor = $ancestorIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $session->log->error($x->full_message);
+            next;
+        }
+        last unless $ancestor;
         push(@crumb,'<a href="'.$ancestor->getUrl("op=formHelper;class=HTMLArea;sub=pageTree").'" class="crumb">'.$ancestor->get("menuTitle").'</a>');
     }
     $output .= '<div class="crumbTrail">'.join(" &gt; ", @crumb)."</div>\n<ul>";
-    my $children = $base->getLineage(["children"],{returnObjects=>1});
-    foreach my $child (@{$children}) {
+    my $childIter = $base->getLineageIterator(["children"]);
+    while ( 1 ) {
+        my $child;
+        eval { $child = $childIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $session->log->error($x->full_message);
+            next;
+        }
+        last unless $child;
         next unless $child->canView;
         $output .= '<li><a href="#" class="selectLink" onclick="selectLink(\'' . $child->get('url') . '\'); return false;">['
             . $i18n->get("select") . ']</a> <a href="' . $child->getUrl("op=formHelper;class=HTMLArea;sub=pageTree")
@@ -253,8 +286,15 @@ JS
 
     my @crumb;
     my $media;
-    my $ancestors = $base->getLineage(["self","ancestors"],{returnObjects=>1});
-    foreach my $ancestor (@{$ancestors}) {
+    my $ancestorIter = $base->getLineageIterator(["self","ancestors"]);
+    while ( 1 ) {
+        my $ancestor;
+        eval { $ancestor = $ancestorIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $session->log->error($x->full_message);
+            next;
+        }
+        last unless $ancestor;
         push(@crumb,'<a href="'.$ancestor->getUrl("op=formHelper;class=HTMLArea;sub=imageTree").'" class="crumb">'.$ancestor->get("menuTitle").'</a>');
         if ($ancestor->get('assetId') eq 'PBasset000000000000003') {
             $media = $ancestor;
@@ -276,8 +316,8 @@ JS
     $output .= '<div class="crumbTrail">'.join(" &gt; ", @crumb)."</div>\n<ul>";
 
     my $useAssetUrls = $session->config->get("richEditorsUseAssetUrls");
-    my $children = $base->getLineage(["children"],{returnObjects=>1});
-    foreach my $child (@{$children}) {
+    my $children = $base->getLineageIterator(["children"]);
+    while ( my $child = $children->() ) {
         next unless $child->canView;
         $output .= '<li>';
         if ($child->isa('WebGUI::Asset::File::Image')) {
@@ -386,8 +426,8 @@ sub www_addFolderSave {
 		title                    => $filename,
 		menuTitle                => $filename,
 		url                      => $base->getUrl.'/'.$filename,
-		groupIdEdit              => $session->form->process('groupIdEdit') || $base->get('groupIdEdit'),
-		groupIdView              => $session->form->process('groupIdView') || $base->get('groupIdView'),
+		groupIdEdit              => $base->get('groupIdEdit'),
+		groupIdView              => $base->get('groupIdView'),
 		ownerUserId              => $session->user->userId,
 		startDate                => $base->get('startDate'),
 		endDate                  => $base->get('endDate'),
@@ -410,6 +450,7 @@ sub www_addFolderSave {
 		className                => 'WebGUI::Asset::Wobject::Folder',
 		#filename                 => $filename,
 		});
+    WebGUI::VersionTag->autoCommitWorkingIfEnabled($session, { allowComments => 0 });
 	$session->http->setRedirect($base->getUrl('op=formHelper;class=HTMLArea;sub=imageTree'));
 	return undef;
 }
@@ -495,6 +536,7 @@ sub www_addImageSave {
         $child->update({url => $child->fixUrl});
         $child->applyConstraints;
     }
+    WebGUI::VersionTag->autoCommitWorkingIfEnabled($session, { allowComments => 0 });
     $session->http->setRedirect($base->getUrl('op=formHelper;class=HTMLArea;sub=imageTree'));
     return undef;
 }

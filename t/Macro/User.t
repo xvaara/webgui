@@ -51,7 +51,7 @@ plan tests => $numTests;
 
 @testSets = setupTest($session, @testSets);
 my @users = map { $_->{user} } @testSets;
-WebGUI::Test->usersToDelete(@users);
+WebGUI::Test->addToCleanup(@users);
 
 foreach my $testSet (@testSets) {
 	$session->user({ userId => $testSet->{user}->userId });
@@ -78,7 +78,4 @@ sub setupTest {
 		$testSet->{user} = $user;
 	}
 	return @testSets;
-}
-
-END { ##Clean-up after yourself, always
 }

@@ -176,6 +176,7 @@ is($macroOutput, 1, 'generateAdditionalHeadTags: process a macro');
 ####################################################
 
 my ($versionTag, $templates, $article, $snippet) = setup_assets($session);
+WebGUI::Test->addToCleanup($versionTag);
 
 $style->sent(0);
 is($style->sent, 0, 'process: setup sent to 0');
@@ -328,14 +329,14 @@ TODO: {
 ####################################################
 #
 # process 
-# no duped headBlockContent
+# no duped extraHeadTagsContent
 #
 ####################################################
 
 $style->useEmptyStyle(1);
 $style->sent(0);
 
-$session->scratch->set('personalStyleId', $templates->{headBlock}->getId);
+$session->scratch->set('personalStyleId', $templates->{extraHeadTags}->getId);
 
 $styled = $style->process('body.content', 'notATemplateId');
 
@@ -369,7 +370,8 @@ $expectedMetas = [
              'content' => 'must-revalidate'
            },
 ];
-cmp_bag(\@metas, $expectedMetas, 'process, headBlock:no duped headBlock from style template');
+cmp_bag(\@metas, $expectedMetas, 'process, extraHeadTags:no duped extraHeadTags from style template');
+
 ####################################################
 #
 # process 
@@ -472,6 +474,7 @@ sub setup_assets {
 	my $properties = {
 		title => 'personal style test template',
 		className => 'WebGUI::Asset::Template',
+		parser    => 'WebGUI::Asset::Template::HTMLTemplate',
 		url => 'personal_style',
 		namespace => 'Style',
 		template => "PERSONAL STYLE TEMPLATE\n\nBODY=<tmpl_var body.content>\n\nHEAD=<tmpl_var head.tags>",
@@ -480,19 +483,21 @@ sub setup_assets {
 	};
 	$templates->{personal} = $importNode->addChild($properties, $properties->{id});
 	$properties = {
-		title => 'personal style test template with headBlock',
+		title => 'personal style test template with extraHeadTags',
 		className => 'WebGUI::Asset::Template',
+		parser    => 'WebGUI::Asset::Template::HTMLTemplate',
 		url => 'headblock_style',
 		namespace => 'Style',
 		template => 'HEADBLOCK STYLE TEMPLATE\n\nBODY=<tmpl_var body.content>\n\nHEAD=<tmpl_var head.tags>',
-		headBlock => q|<meta name="keywords" content="keyword1,keyword2" />|,
+		extraHeadTags => q|<meta name="keywords" content="keyword1,keyword2" />|,
 		id => 'testTemplate_headblock',
 		#     '1234567890123456789012'
 	};
-	$templates->{headBlock} = $importNode->addChild($properties, $properties->{id});
+	$templates->{extraHeadTags} = $importNode->addChild($properties, $properties->{id});
 	$properties = {
 		title => 'personal style test template for printing',
 		className => 'WebGUI::Asset::Template',
+		parser    => 'WebGUI::Asset::Template::HTMLTemplate',
 		url => 'personal_style_printable',
 		namespace => 'Style',
 		##Note, at this point 
@@ -504,6 +509,7 @@ sub setup_assets {
 	$properties = {
 		title => 'asset template for printing',
 		className => 'WebGUI::Asset::Template',
+		parser    => 'WebGUI::Asset::Template::HTMLTemplate',
 		url => 'asset_style_printable',
 		namespace => 'Style',
 		##Note, at this point 
@@ -515,6 +521,7 @@ sub setup_assets {
 	$properties = {
 		title => 'user template for printing',
 		className => 'WebGUI::Asset::Template',
+		parser    => 'WebGUI::Asset::Template::HTMLTemplate',
 		url => 'user_style_printable',
 		namespace => 'Style',
 		##Note, at this point 
@@ -526,6 +533,7 @@ sub setup_assets {
 	$properties = {
 		title => 'asset for printing',
 		className => 'WebGUI::Asset::Wobject::Article',
+		parser    => 'WebGUI::Asset::Template::HTMLTemplate',
 		url => 'printable_article',
 		id => 'printableAsset00000000',
 		printableStyleTemplateId => $templates->{asset}->getId,
@@ -538,6 +546,7 @@ sub setup_assets {
 	$properties = {
 		title => 'Daddy Snippet',
 		className => 'WebGUI::Asset::Snippet',
+		parser    => 'WebGUI::Asset::Template::HTMLTemplate',
 		url => 'daddy_snippet',
 		id => 'printableSnippet0Daddy',
 		#     '1234567890123456789012'
@@ -547,6 +556,7 @@ sub setup_assets {
 	$properties = {
 		title => 'My Snippet',
 		className => 'WebGUI::Asset::Snippet',
+		parser    => 'WebGUI::Asset::Template::HTMLTemplate',
 		url => 'printable_snippet',
 		id => 'printableSnippet123456',
 		#     '1234567890123456789012'
@@ -555,10 +565,4 @@ sub setup_assets {
 	my $snippet = $daddySnippet->addChild($properties, $properties->{id});
 	$versionTag->commit;
 	return ($versionTag, $templates, $asset, $snippet);
-}
-
-END {
-	if (defined $versionTag and ref $versionTag eq 'WebGUI::VersionTag') {
-		$versionTag->rollback;
-	}
 }

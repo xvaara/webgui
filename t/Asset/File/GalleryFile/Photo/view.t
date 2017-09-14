@@ -24,15 +24,20 @@ use WebGUI::Asset::File::GalleryFile::Photo;
 #----------------------------------------------------------------------------
 # Init
 my $session         = WebGUI::Test->session;
+my $user            = WebGUI::User->new( $session, 3 );
 my $node            = WebGUI::Asset->getImportNode($session);
 my $versionTag      = WebGUI::VersionTag->getWorking($session);
+
 $versionTag->set({name=>"Photo Test"});
+addToCleanup($versionTag);
+
 my $gallery
     = $node->addChild({
         className           => "WebGUI::Asset::Wobject::Gallery",
         groupIdAddComment   => 7,   # Everyone
         groupIdAddFile      => 2,   # Registered Users
     });
+
 my $album
     = $gallery->addChild({
         className           => "WebGUI::Asset::Wobject::GalleryAlbum",
@@ -42,16 +47,40 @@ my $album
     {
         skipAutoCommitWorkflows => 1,
     });
-my $photo
+
+my $previousPhoto
     = $album->addChild({
         className           => "WebGUI::Asset::File::GalleryFile::Photo",
-        ownerUserId         => 3,
+        ownerUserId         => $user->getId,
     },
     undef,
     undef,
     {
         skipAutoCommitWorkflows => 1,
     });
+
+my $photo
+    = $album->addChild({
+        className           => "WebGUI::Asset::File::GalleryFile::Photo",
+        ownerUserId         => $user->getId,
+    },
+    undef,
+    undef,
+    {
+        skipAutoCommitWorkflows => 1,
+    });
+
+my $nextPhoto
+    = $album->addChild({
+        className           => "WebGUI::Asset::File::GalleryFile::Photo",
+        ownerUserId         => $user->getId,
+    },
+    undef,
+    undef,
+    {
+        skipAutoCommitWorkflows => 1,
+    });
+
 $versionTag->commit;
 $photo->setFile( WebGUI::Test->getTestCollateralPath('page_title.jpg') );
 
@@ -67,7 +96,10 @@ my $testTemplateVars    = {
     synopsis            => '',      # Synopsis is not undef, is changed to empty string
     canComment          => bool( 1 ),
     canEdit             => bool( 0 ),
-    ownerUsername       => WebGUI::User->new( $session, 3 )->username,
+    ownerUsername       => $user->get("username"),
+    ownerAlias          => $user->get("alias") || $user->get("username"),
+    ownerId             => $user->getId,
+    ownerProfileUrl     => $user->getProfileUrl,
     synopsis_textonly   => WebGUI::HTML::filter( $photo->get('synopsis'), "all" ),
     url                 => $photo->getUrl,
     url_addArchive      => $album->getUrl('func=addArchive'),
@@ -87,7 +119,23 @@ my $testTemplateVars    = {
     numberOfComments    => scalar @{ $photo->getCommentIds },
     exifLoop            => ignore(), # Tested elsewhere
     isPending           => ( $photo->get("status") eq "pending" ),
-
+    firstFile_url       => $previousPhoto->getUrl,
+    firstFile_thumbnailUrl 
+        => $previousPhoto->getThumbnailUrl,
+    firstFile_title     => $previousPhoto->get("title"),
+    previousFile_url    => $previousPhoto->getUrl,
+    previousFile_thumbnailUrl 
+        => $previousPhoto->getThumbnailUrl,    
+    previousFile_title  => $previousPhoto->get("title"),
+    nextFile_url        => $nextPhoto->getUrl,
+    nextFile_thumbnailUrl 
+        => $nextPhoto->getThumbnailUrl,    
+    nextFile_title      => $nextPhoto->get("title"),
+    firstFile_title     => $previousPhoto->get("title"),
+    lastFile_url        => $nextPhoto->getUrl,
+    lastFile_thumbnailUrl 
+        => $nextPhoto->getThumbnailUrl,    
+    lastFile_title      => $nextPhoto->get("title"),
 };
 
 # Ignore all EXIF tags, they're tested in exif.t
@@ -112,9 +160,3 @@ cmp_deeply(
     $testTemplateVars,
     "getTemplateVars is correct and complete",
 );
-
-#----------------------------------------------------------------------------
-# Cleanup
-END {
-    $versionTag->rollback();
-}

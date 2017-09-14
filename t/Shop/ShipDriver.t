@@ -43,10 +43,6 @@ my $loaded = use_ok('WebGUI::Shop::ShipDriver');
 
 my $storage;
 
-SKIP: {
-
-skip 'Unable to load module WebGUI::Shop::ShipDriver', $tests unless $loaded;
-
 #######################################################################
 #
 # definition
@@ -163,6 +159,7 @@ my $options = {
               };
 
 $driver = WebGUI::Shop::ShipDriver->create( $session, $options );
+WebGUI::Test->addToCleanup($driver);
 
 isa_ok($driver, 'WebGUI::Shop::ShipDriver');
 
@@ -357,8 +354,6 @@ cmp_deeply(
 
 isa_ok( $driver->get(), 'HASH', 'get returns a hashref if called with no param');
 
-note explain $driver->get();
-
 is($driver->get('groupToUse'), 7, '... default group is 7');
 
 $options = $driver->get();
@@ -398,11 +393,3 @@ my $count = $session->db->quickScalar('select count(*) from shipper where shippe
 is($count, 0, 'delete deleted the object');
 
 undef $driver;
-
-
-}
-
-#----------------------------------------------------------------------------
-# Cleanup
-END {
-}

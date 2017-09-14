@@ -15,6 +15,7 @@ package WebGUI::Session::Setting;
 =cut
 
 use strict;
+use Scalar::Util qw( weaken );
 
 =head1 NAME
 
@@ -64,10 +65,7 @@ The initial value of the setting.
 
 sub add {
 	my $self = shift;
-	my $name = shift;
-	my $value = shift;
-	$self->{_settings}{$name} = $value;
-	$self->session->db->write("insert into settings (name,value) values (?,?)",[$name, $value]);
+    $self->set(@_);
 }
 
 #-------------------------------------------------------------------
@@ -149,7 +147,9 @@ sub new {
 	my $class = shift;
 	my $session = shift;
 	my $settings = $session->db->buildHashRef("select * from settings", [], {noOrder => 1});
-	bless {_settings=>$settings, _session=>$session}, $class;
+	my $self = bless {_settings=>$settings, _session=>$session}, $class;
+        weaken( $self->{_session} );
+        return $self;
 }
 
 
@@ -208,7 +208,7 @@ sub set {
 	my $name = shift;
 	my $value = shift;
 	$self->{_settings}{$name} = $value;
-	$self->session->db->write("update settings set value=? where name=?",[$value, $name]);
+    $self->session->db->write("REPLACE INTO settings (name, value) VALUES (?, ?)", [$name, $value]);
 }
 
 

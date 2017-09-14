@@ -18,6 +18,7 @@ use strict;
 use base 'WebGUI::Form::Text';
 use WebGUI::Form::Hidden;
 use WebGUI::International;
+use Scalar::Util qw/blessed/;
 
 my $isaEpoch = qr/^-?\d+$/;
 
@@ -189,6 +190,30 @@ sub getValueAsHtml {
 
 #-------------------------------------------------------------------
 
+=head2 headTags ()
+
+Set head tags for this form plugin
+
+=cut
+
+sub headTags {
+    my $self    = shift;
+    my $session = $self->session;
+    my $style   = $session->style;
+    my $url     = $session->url;
+    $style->setLink($url->extras('yui/build/calendar/assets/skins/sam/calendar.css'), { rel=>"stylesheet", type=>"text/css", media=>"all" });
+    $style->setScript($url->extras('yui/build/utilities/utilities.js'),         { type => 'text/javascript' });
+    $style->setScript($url->extras('yui/build/json/json-min.js'),               { type => 'text/javascript' });
+    $style->setScript($url->extras('yui/build/yahoo/yahoo-min.js'),             { type => 'text/javascript' });
+    $style->setScript($url->extras('yui/build/dom/dom-min.js'),                 { type => 'text/javascript' });
+    $style->setScript($url->extras('yui/build/event/event-min.js'),             { type => 'text/javascript' });
+    $style->setScript($url->extras('yui/build/calendar/calendar-min.js'),       { type => 'text/javascript' });
+    $style->setScript($url->extras('yui-webgui/build/i18n/i18n.js' ),           { type => 'text/javascript' });
+    $style->setScript($url->extras('yui-webgui/build/datepicker/datepicker.js'),{ type => 'text/javascript' });
+}
+
+#-------------------------------------------------------------------
+
 =head2 isDynamicCompatible ( )
 
 A class method that returns a boolean indicating whether this control is compatible with the DynamicField control.
@@ -217,20 +242,16 @@ sub toHtml {
         $value = $self->set("value",'');
     }
     else {
-        $value = WebGUI::DateTime->new($session, $self->getOriginalValue)->toMysqlDate;
+        my $originalValue = $self->getOriginalValue;
+        my $dt = eval { WebGUI::DateTime->new($session, $originalValue); };
+        $dt = WebGUI::DateTime->new($session,0) if ! (blessed $dt && $dt->isa('DateTime'));  ##Parsing error
+        if ($originalValue =~ $isaEpoch) {
+            ##Epoch date, correct for time zone;
+            $dt->set_time_zone($session->datetime->getTimeZone);
+        }
+        $value = $dt->toMysqlDate;
     }
 
-    my $style   = $session->style;
-    my $url     = $session->url;
-    $style->setLink($url->extras('yui/build/calendar/assets/skins/sam/calendar.css'), { rel=>"stylesheet", type=>"text/css", media=>"all" });
-    $style->setScript($url->extras('/yui/build/utilities/utilities.js'),        { type => 'text/javascript' });
-    $style->setScript($url->extras('yui/build/json/json-min.js'),               { type => 'text/javascript' });
-    $style->setScript($url->extras('yui/build/yahoo/yahoo-min.js'),             { type => 'text/javascript' });
-    $style->setScript($url->extras('yui/build/dom/dom-min.js'),                 { type => 'text/javascript' });
-    $style->setScript($url->extras('yui/build/event/event-min.js'),             { type => 'text/javascript' });
-    $style->setScript($url->extras('yui/build/calendar/calendar-min.js'),       { type => 'text/javascript' });
-    $style->setScript($url->extras('yui-webgui/build/i18n/i18n.js' ),           { type => 'text/javascript' });
-    $style->setScript($url->extras('yui-webgui/build/datepicker/datepicker.js'),{ type => 'text/javascript' });
 
     my $field = WebGUI::Form::Text->new($self->session,
         name      => $self->get("name"),
@@ -240,6 +261,7 @@ sub toHtml {
         id        => $self->get('id'),
         maxlength => $self->get("maxlength"),
     );
+    $self->headTags;
     return $field->toHtml;
 }
 

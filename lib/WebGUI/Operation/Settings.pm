@@ -204,6 +204,14 @@ sub definition {
         hoverHelp=>$i18n->get("Enable Metadata description"),
         defaultValue=>$setting->get("metaDataEnabled")
 		});
+	push(@fields, {
+		tab=>"content",
+		fieldType=>"interval",
+        name=>"maxCacheTimeout",
+        label=>$i18n->get("Maximum cache timeout"),
+        hoverHelp=>$i18n->get("Maximum cache timeout description"),
+        defaultValue=>$setting->get("maxCacheTimeout")
+		});
 	# user interface settings
 	push(@fields, {
 		tab=>"ui",
@@ -373,6 +381,15 @@ sub definition {
 		hoverHelp=>$i18n->get('118 description'),
 		defaultValue=>$setting->get("anonymousRegistration")
 		});
+    push(@fields, {
+            tab          => 'user',
+            fieldType    => 'yesNo',
+            name         => 'enableUsersAfterAnonymousRegistration',
+            label        => $i18n->get('Enable Users after Anonymous Registration?'),
+            hoverHelp    => $i18n->get('enableUsersAfterAnonymousRegistration help'),
+            defaultValue => $setting->get('enableUsersAfterAnonymousRegistration')
+        }
+    );
 	push(@fields, {
 		tab=>"user",
 		fieldType=>"yesNo",
@@ -520,6 +537,7 @@ sub definition {
         groupIdAdminActiveSessions
         groupIdAdminAdSpace
         groupIdAdminCache
+        groupIdAdminClipboard
         groupIdAdminCron
         groupIdAdminDatabaseLink
         groupIdAdminFilePump
@@ -534,6 +552,7 @@ sub definition {
         groupIdAdminReplacements
         groupIdAdminSpectre
         groupIdAdminStatistics
+        groupIdAdminTrash
         groupIdAdminUser
         groupIdAdminUserAdd
         groupIdAdminVersionTag

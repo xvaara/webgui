@@ -23,6 +23,18 @@ our $I18N = {
         context     => "Label for Save button",
     },
     
+    'rotate left' => {
+        message     => "90&deg; CCW",
+        lastUpdated => 1270582436,
+        context     => "Label for rotate left button",
+    },
+    
+    'rotate right' => {
+        message     => "90&deg; CW",
+        lastUpdated => 1270582436,
+        context     => "Label for rotate right button",
+    },    
+    
     'save message' => {
         message     => 'Album settings saved.',
         lastUpdated => 0,
@@ -38,12 +50,11 @@ our $I18N = {
         lastUpdated => 0,
     },
 
-
     'delete message' => {
         message     => 'Album has been deleted. <a href="%s">Return to Gallery</a>',
         lastUpdated => 0,
     },
-
+        
     'help common title' => {
         message     => 'Gallery Album Variables (Common)',
         lastUpdated => 0,
@@ -266,11 +277,21 @@ our $I18N = {
         message     => 'The keywords for the files being uploaded.',
         lastUpdated => 0,
     },
+    
+    'helpvar form_location' => {
+        message     => 'The location for the files being uploaded.',
+        lastUpdated => 0,
+    },    
 
     'helpvar form_friendsOnly' => {
         message     => 'Should the file be friends only?',
         lastUpdated => 0,
     },
+    
+    'helpvar form_sortBy' => {
+        message     => 'Property according to which photos should be sorted.',
+        lastUpdated => 0,
+    },    
 
     'helpvar url_yes' => {
         message     => 'Confirm the delete of this Album.',
@@ -440,13 +461,43 @@ our $I18N = {
         lastUpdated => 0,
         context     => 'Label for the "keywords" field of the Add Archive page',
     },
-
+    
+    'addArchive location' => {
+        message     => 'Location',
+        lastUpdated => 0,
+        context     => 'Label for the "location" field of the Add Archive page',
+    },
+    
     'addArchive friendsOnly' => {
         message     => 'Friends Only',
         lastUpdated => 0,
-        context     => 'Label for the "friends only" field of the Add Archive page',
+        context     => 'Label for the "friendsOnly" field of the Add Archive page',
+    },
+    
+    'addArchive sortBy' => {
+        message     => 'Sort By',
+        lastUpdated => 0,
+        context     => 'Label for the "sortBy" field of the Add Archive page',
     },
 
+    'addArchive sortBy name' => {
+        message     => 'Name',
+        lastUpdated => 0,
+        context     => 'Label for the "Name" radio button',
+    },
+    
+    'addArchive sortBy date' => {
+        message     => 'Date',
+        lastUpdated => 0,
+        context     => 'Label for the "Date" radio button',
+    },
+        
+    'addArchive sortBy fileOrder' => {
+        message     => 'File Order',
+        lastUpdated => 0,
+        context     => 'Label for the "File Order" radio button',
+    },
+    
     'template addArchive title' => {
         message     => "Add Zip Archive",
         lastUpdated => 0,
@@ -524,6 +575,18 @@ our $I18N = {
         lastUpdated => 1213631346,
         context     => q{Description of template variable},
     },
+    
+    'helpvar form_rotateLeft' => {
+        message     => q{A button to rotate the photo by 90&deg; counter clockwise.},
+        lastUpdated => 1270582436,
+        context     => q{Description of template variable},
+    },
+    
+    'helpvar form_rotateRight' => {
+        message     => q{A button to rotate the photo by 90&deg; clockwise.},
+        lastUpdated => 1270582436,
+        context     => q{Description of template variable},
+    },    
 
     'helpvar form_delete' => {
         message     => q{A button to delete the image.},
@@ -605,6 +668,12 @@ our $I18N = {
 
     'Extracting archive' => {
         message     => 'Extracting archive',
+        lastUpdated => 1237403498,
+        context     => 'label for progress bar in addArchive',
+    },
+
+    'Getting list of files for sorting purposes' => {
+        message     => 'Getting list of files for sorting purposes',
         lastUpdated => 1237403498,
         context     => 'label for progress bar in addArchive',
     },

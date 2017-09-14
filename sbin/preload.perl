@@ -2,7 +2,10 @@ use strict;
 
 my $webguiRoot = '/data/WebGUI';
 
-unshift @INC, $webguiRoot . "/lib";
+#@INC = grep { $_ ne q{.} } @INC;
+
+unshift @INC, "$webguiRoot/lib";
+unshift @INC, "$webguiRoot/lib/plebgui_mock";
 
 # add custom lib directories to library search path
 unshift @INC, grep {
@@ -14,6 +17,35 @@ unshift @INC, grep {
         1;
     }
 } readLines($webguiRoot."/sbin/preload.custom");
+
+#----------------------------------------
+# WebGUI modules.
+#----------------------------------------
+require WebGUI;
+require WebGUI::Config;
+require WebGUI::Pluggable;
+
+# these modules should always be skipped
+my @excludes = qw(WebGUI::PerformanceProfiler);
+push @excludes, readLines($webguiRoot."/sbin/preload.exclude");
+
+WebGUI::Pluggable::findAndLoad( "WebGUI", 
+    { 
+        exclude     => \@excludes, 
+        onLoadFail  => sub { warn sprintf 'Error loading %s: %s', @_ },
+    }
+);
+
+#----------------------------------------
+# Preload all site configs.
+#----------------------------------------
+WebGUI::Config->loadAllConfigs($webguiRoot);
+
+#----------------------------------------
+# WebGUI::Fork initialization
+#----------------------------------------
+# Initialize this in the psgi
+#WebGUI::Fork->init();
 
 #----------------------------------------
 # Logger
@@ -28,27 +60,9 @@ Log::Log4perl->init( $webguiRoot."/etc/log.conf" );
 require DBI;
 DBI->install_driver("mysql"); # Change to match your database driver.
 
-#----------------------------------------
-# WebGUI modules.
-#----------------------------------------
-require WebGUI;
-require WebGUI::Config;
-require WebGUI::Pluggable;
-
-# these modules should always be skipped
-my @excludes = qw(WebGUI::i18n::English::Automated_Information WebGUI::PerformanceProfiler);
-push @excludes, readLines($webguiRoot."/sbin/preload.exclude");
-
-WebGUI::Pluggable::findAndLoad( "WebGUI", 
-    { 
-        exclude     => \@excludes, 
-        onLoadFail  => sub { warn sprintf 'Error loading %s: %s', @_ },
-    }
-);
-
-require APR::Request::Apache2;
-require Apache2::Cookie;
-require Apache2::ServerUtil;
+#require APR::Request::Apache2;
+#require Apache2::Cookie;
+#require Apache2::ServerUtil;
 
 if ( $ENV{MOD_PERL} ) {
     # Add WebGUI to Apache version tokens
@@ -61,12 +75,6 @@ if ( $ENV{MOD_PERL} ) {
 $| = 1;
 
 print "\nStarting WebGUI ".$WebGUI::VERSION."\n";
-
-#----------------------------------------
-# Preload all site configs.
-#----------------------------------------
-WebGUI::Config->loadAllConfigs($webguiRoot);
-
 
 # reads lines from a file into an array, trimming white space and ignoring commented lines
 sub readLines {

@@ -22,7 +22,7 @@ use WebGUI::Paginator;
 use WebGUI::Keyword;
 use WebGUI::Search;
 use Class::C3;
-use base qw/WebGUI::AssetAspect::RssFeed WebGUI::Asset::Wobject/;
+use base qw/WebGUI::AssetAspect::RssFeed WebGUI::Asset::Wobject WebGUI::AssetAspect::Installable/;
 use File::Path;
 
 use constant DATE_FORMAT => '%c_%D_%y';
@@ -164,6 +164,17 @@ sub definition {
             label         => $i18n->get('approval workflow'),
             hoverHelp     => $i18n->get('approval workflow help'),
         },    
+        storySortOrder => {
+            fieldType     => "selectBox",
+            tab           => 'display',
+            defaultValue  => 'Chronologically',
+            options       => { 
+                 Alphabetically  => $i18n->get('alphabetically'),
+                 Chronologically => $i18n->get('chronologically') 
+            },
+            label         => $i18n->get('sortAlphabeticallyChronologically'),
+            hoverHelp     => $i18n->get('sortAlphabeticallyChronologically description'),
+        },
     );
     push(@{$definition}, {
         assetName=>$i18n->get('assetName'),
@@ -311,7 +322,7 @@ sub getFolder {
 	my ($self, $date) = @_;
     my $session    = $self->session;
     my $folderName = $session->datetime->epochToHuman($date, DATE_FORMAT);
-    my $folderUrl  = join '/', $self->getUrl, $folderName;
+    my $folderUrl  = $self->getFolderUrl($folderName);
     my $folder     = WebGUI::Asset->newByUrl($session, $folderUrl);
     return $folder if $folder;
     ##The requested folder doesn't exist.  Make it and autocommit it.
@@ -319,9 +330,14 @@ sub getFolder {
     ##For a fully automatic commit, save the current tag, create a new one
     ##with the commit without approval workflow, commit it, then restore
     ##the original if it exists
-    my $oldVersionTag = WebGUI::VersionTag->getWorking($session, 'noCreate');
-    my $newVersionTag = WebGUI::VersionTag->create($session, { workflowId => 'pbworkflow00000000003', });
-    $newVersionTag->setWorking;
+    my ($oldVersionTag, $newVersionTag);
+    $oldVersionTag = WebGUI::VersionTag->getWorking($session, 'noCreate');
+
+    if ($self->hasBeenCommitted) {
+        $newVersionTag = WebGUI::VersionTag->create($session, { workflowId => 'pbworkflow00000000003', });
+        $newVersionTag->setWorking;
+        $newVersionTag->set({ name => 'Adding folder '. $folderName. ' to archive '. $self->getUrl});
+    }
 
     ##Call SUPER because my addChild calls getFolder
     $folder = $self->SUPER::addChild({
@@ -332,13 +348,33 @@ sub getFolder {
         isHidden        => 1,
         styleTemplateId => $self->get('styleTemplateId'),
     });
-    $newVersionTag->commit();
+    $newVersionTag->commit() if $newVersionTag;
     ##Restore the old one, if it exists
     $oldVersionTag->setWorking() if $oldVersionTag;
 
     ##Get a new version of the asset from the db with the correct state
     $folder = WebGUI::Asset->newByUrl($session, $folderUrl);
     return $folder;
+}
+
+#-------------------------------------------------------------------
+
+=head2 getFolderUrl ( name )
+
+Constructs a url for a subfolder with the given name.
+
+=cut
+
+sub getFolderUrl {
+    my ($self, $name) = @_;
+    my $session = $self->session;
+    my $base    = $self->getUrl;
+    $base       =~ s/(.*)\..*/$1/;
+    my $url     = "$base/$name";
+    if (my $ext = $session->setting->get('urlExtension')) {
+        $url .= ".$ext";
+    }
+    return $session->url->urlize($url);
 }
 
 #-------------------------------------------------------------------
@@ -400,14 +436,21 @@ for generating an RSS and Atom feeds.
 
 sub getRssFeedItems {
     my $self    = shift;
-    my $stories = $self->getLineageIterator(['descendants'],{
+    my $storyIter = $self->getLineageIterator(['descendants'],{
         excludeClasses => ['WebGUI::Asset::Wobject::Folder'],
         orderByClause  => 'creationDate desc, lineage',
         returnObjects  => 1,
         limit          => $self->get('itemsPerFeed'),
     });
     my $storyData = [];
-    while (my $story = $stories->()) {
+    while ( 1 ) {
+        my $story;
+        eval { $story = $storyIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $self->session->log->error($x->full_message);
+            next;
+        }
+        last unless $story;
         push @{ $storyData }, $story->getRssData;
     }
     return $storyData;
@@ -525,11 +568,12 @@ sub viewTemplateVariables {
         $p = $search->getPaginatorResultSet($self->getUrl, $self->get('storiesPerPage'));
     }
     else {
-        $var->{mode} = 'view';
         ##Only return assetIds,  we'll build data for the things that are actually displayed.
+        $var->{mode} = 'view';
+        my $orderBy = $self->get('storySortOrder') eq 'Alphabetically' ? 'menuTitle, lineage' : 'creationDate desc, lineage'; 
         my $storySql = $self->getLineageSql(['descendants'],{
             excludeClasses => ['WebGUI::Asset::Wobject::Folder'],
-            orderByClause  => 'creationDate desc, lineage',
+            orderByClause  => $orderBy,
         });
         my $storiesPerPage = $self->get('storiesPerPage');
         if ($exporting) {
@@ -539,6 +583,7 @@ sub viewTemplateVariables {
         $p = WebGUI::Paginator->new($session, $self->getUrl, $storiesPerPage);
         $p->setDataByQuery($storySql);
     }
+
     my $storyIds = $p->getPageData();
     if (! $exporting ) {
         ##Pagination variables aren't useful in export mode
@@ -598,7 +643,7 @@ sub viewTemplateVariables {
     }
     $var->{keywordCloud}   = WebGUI::Keyword->new($session)->generateCloud($cloudOptions);
     if (! $exporting) {
-        $var->{searchHeader} = WebGUI::Form::formHeader($session, { action => $self->getUrl })
+        $var->{searchHeader} = WebGUI::Form::formHeader($session, { action => $self->getUrl, method => 'GET',  })
                              . WebGUI::Form::hidden($session, { name   => 'func',   value => 'view' });
         $var->{searchFooter} = WebGUI::Form::formFooter($session);
         $var->{searchButton} = WebGUI::Form::submit($session, { name => 'search',   value => $i18n->get('search','Asset')});

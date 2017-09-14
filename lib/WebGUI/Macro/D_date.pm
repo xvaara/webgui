@@ -37,12 +37,17 @@ time is used instead.
 
 #-------------------------------------------------------------------
 sub process {
-	my $session = shift;
-        my (@param, $temp, $time);
-        @param = @_;
-	$time = $param[1] ||time();
-	$temp =$session->datetime->epochToHuman($time,$param[0]);
-	return $temp;
+    my $session = shift;
+    my $time    = $_[1];
+    if (! defined $time) {
+        $time = time();
+    }
+    else {
+        $time =~ s/^\s+//;
+        $time =~ s/\s+$//;
+    }
+    my $temp = $session->datetime->epochToHuman($time, $_[0]);
+    return $temp;
 }
 
 

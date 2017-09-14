@@ -15,6 +15,7 @@ package WebGUI::SQL;
 =cut
 
 use strict;
+use Scalar::Util qw( weaken );
 use DBI;
 use Tie::IxHash;
 use WebGUI::SQL::ResultSet;
@@ -445,7 +446,9 @@ sub connect {
         $dbh->{$paramName} = $paramValue;
     }
 
-	bless {_dbh=>$dbh, _session=>$session}, $class;
+	my $self = bless {_dbh=>$dbh, _session=>$session}, $class;
+        weaken( $self->{_session} );
+        return $self;
 }
 
 #-------------------------------------------------------------------
@@ -484,7 +487,7 @@ The value to search for in the key column.
 
 sub deleteRow {
 	my ($self, $table, $key, $keyValue) = @_;
-	my $sth = $self->write("delete from $table where ".$key."=?", [$keyValue]);
+	my $sth = $self->write("delete from ".$self->dbh->quote_identifier($table)." where ".$key."=?", [$keyValue]);
 }
 
 
@@ -606,7 +609,7 @@ The value to search for in the key column.
 
 sub getRow {
         my ($self, $table, $key, $keyValue) = @_;
-        my $row = $self->quickHashRef("select * from $table where ".$key."=?",[$keyValue]);
+        my $row = $self->quickHashRef("select * from ".$self->dbh->quote_identifier($table)." where ".$key."=?",[$keyValue]);
         return $row;
 }
 
@@ -676,7 +679,7 @@ sub quickCSV {
 	my $params = shift;
 	my ($sth, $output, @data);
 
-	my $csv = Text::CSV_XS->new({ eol => "\n" });
+	my $csv = Text::CSV_XS->new({ eol => "\n", binary => 1 });
 
 	$sth = $self->prepare($sql);
 	$sth->execute($params);
@@ -685,7 +688,10 @@ sub quickCSV {
 	$output = $csv->string();
 
 	while (@data = $sth->array) {
-		return undef unless $csv->combine(@data);
+		if ( ! $csv->combine(@data) ) {
+                    $self->session->log->error( "Problem creating CSV row: " . $csv->error_diag );
+                    return undef;
+                }
 		$output .= $csv->string();
 	}
 
@@ -946,7 +952,8 @@ sub setRow {
 	my ($self, $table, $keyColumn, $data, $id) = @_;
 	if ($data->{$keyColumn} eq "new" || $id) {
 		$data->{$keyColumn} = $id || $self->session->id->generate();
-		$self->write("replace into $table (" . $self->dbh->quote_identifier($keyColumn) . ") values (?)",[$data->{$keyColumn}]);
+		$self->write("replace into ".$self->dbh->quote_identifier($table)
+            ." (" . $self->dbh->quote_identifier($keyColumn) . ") values (?)",[$data->{$keyColumn}]);
 	}
 	my @fields = ();
 	my @data = ();
@@ -958,7 +965,7 @@ sub setRow {
 	}
 	if ($fields[0] ne "") {
 		push(@data,$data->{$keyColumn});
-		$self->write("update $table set " . join(", ", @fields)
+		$self->write("update ".$self->dbh->quote_identifier($table)." set " . join(", ", @fields)
             . " where " . $self->dbh->quote_identifier($keyColumn) . "=?", \@data);
 	}
 	return $data->{$keyColumn};

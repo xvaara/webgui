@@ -20,6 +20,7 @@ use WebGUI::Affiliate;
 use WebGUI::Exception;
 use WebGUI::Pluggable;
 use WebGUI::Session;
+use WebGUI::Asset::Template;
 
 =head1 NAME
 
@@ -42,7 +43,7 @@ These subroutines are available from this package:
 
 #-------------------------------------------------------------------
 
-=head2 handler ( request, server, config ) 
+=head2 handler ( request, server, config )
 
 The Apache request handler for this package.
 
@@ -63,48 +64,76 @@ to the user, instead of displaying the Page Not Found page.
 sub handler {
     my ($request, $server, $config) = @_;
     $request->push_handlers(PerlResponseHandler => sub {
+        my $request = shift;
+
+        if (! $request->isa('WebGUI::Session::Plack') ){
+            require Apache2::Request;
+            $request = Apache2::Request->new($request);
+        }
+
         my $session = $request->pnotes('wgSession');
-        unless (defined $session) {
-            $session = WebGUI::Session->open($server->dir_config('WebguiRoot'), $config->getFilename, $request, $server);
+
+        WEBGUI_FATAL: {
+            unless (defined $session) {
+                $session = WebGUI::Session->open($server->dir_config('WebguiRoot'), $config->getFilename, $request, $server);
+                return Apache2::Const::OK if ! defined $session;
+            }
+
+            # if there's no session cookie but there is HTTP auth, try to log in using that
+            my $auth = $request->headers_in->{'Authorization'};
+            if( $session->user->isVisitor and $auth ) {
+                if( $auth =~ m/^Basic/ ) {
+                    $auth =~ s/Basic //;
+                    WebGUI::authen($request, split(":", MIME::Base64::decode_base64($auth), 2), $session);
+                }
+                else { # realm oriented
+                    $request->push_handlers(PerlAuthenHandler => sub { return WebGUI::authen($request, undef, undef, $session)});
+                }
+            }
+
+            WebGUI::Asset::Template->processVariableHeaders($session);
+            foreach my $handler (@{$config->get("contentHandlers")}) {
+                my $output = eval { WebGUI::Pluggable::run($handler, "handler", [ $session ] )};
+                if ( my $e = WebGUI::Error->caught ) {
+                    $session->errorHandler->error($e->package.":".$e->line." - ".$e->error);
+                    $session->errorHandler->debug($e->package.":".$e->line." - ".$e->trace);
+                }
+                elsif ( $@ ) {
+                    $session->errorHandler->error( $@ );
+                }
+                else {
+                    if ($output eq "chunked") {
+                        if ($session->errorHandler->canShowDebug()) {
+                            $session->output->print($session->errorHandler->showDebug(),1);
+                        }
+                        last;
+                    }
+                    if ($output eq "empty") {
+                        if ($session->errorHandler->canShowDebug()) {
+                            $session->output->print($session->errorHandler->showDebug(),1);
+                        }
+                        last;
+                    }
+                    elsif (defined $output && $output ne "") {
+                        $session->http->sendHeader;
+                        $session->output->print($output);
+                        if ($session->errorHandler->canShowDebug()) {
+                            $session->output->print($session->errorHandler->showDebug(),1);
+                        }
+                        last;
+                    }
+                    # Keep processing for success codes
+                    elsif ($session->http->getStatus < 200 || $session->http->getStatus > 299) {
+                        $session->http->sendHeader;
+                        last;
+                    }
+                }
+            }
         }
-        WEBGUI_FATAL: foreach my $handler (@{$config->get("contentHandlers")}) {
-            my $output = eval { WebGUI::Pluggable::run($handler, "handler", [ $session ] )};
-            if ( my $e = WebGUI::Error->caught ) {
-                $session->errorHandler->error($e->package.":".$e->line." - ".$e->error);
-                $session->errorHandler->debug($e->package.":".$e->line." - ".$e->trace);
-            }
-            elsif ( $@ ) {
-                $session->errorHandler->error( $@ );
-            }
-            else {
-                if ($output eq "chunked") {
-                    if ($session->errorHandler->canShowDebug()) {
-                        $session->output->print($session->errorHandler->showDebug(),1);
-                    }
-                    last;
-                }
-                if ($output eq "empty") {
-                    if ($session->errorHandler->canShowDebug()) {
-                        $session->output->print($session->errorHandler->showDebug(),1);
-                    }
-                    last;
-                }
-                elsif (defined $output && $output ne "") {
-                    $session->http->sendHeader;
-                    $session->output->print($output);
-                    if ($session->errorHandler->canShowDebug()) {
-                        $session->output->print($session->errorHandler->showDebug(),1);
-                    }
-                    last;
-                }
-                # Keep processing for success codes
-                elsif ($session->http->getStatus < 200 || $session->http->getStatus > 299) {
-                    $session->http->sendHeader;
-                    last;
-                }
-            }
-        }
-        $session->close;
+        $session->output->print(
+            WebGUI::Asset::Template->getVariableJson($session), 1
+        );
+        $session->close if defined $session;
         return Apache2::Const::OK;
     });
     $request->push_handlers(PerlMapToStorageHandler => sub { return Apache2::Const::OK });

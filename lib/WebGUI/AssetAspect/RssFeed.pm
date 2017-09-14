@@ -143,6 +143,28 @@ sub definition {
 
 #-------------------------------------------------------------------
 
+=head2 dispatch ( )
+
+Extent the base method in Asset.pm to handle RSS feeds.
+
+=cut
+
+sub dispatch {
+    my ( $self, $fragment ) = @_;
+    if ($fragment eq '.rss') {
+        return $self->www_viewRss;
+    }
+    elsif ($fragment eq '.atom') {
+        return $self->www_viewAtom;
+    }
+    elsif ($fragment eq '.rdf') {
+        return $self->www_viewRdf;
+    }
+    return $self->next::method($fragment);
+}
+
+#-------------------------------------------------------------------
+
 =head2 _httpBasicLogin ( )
 
 Set header values and content to show the HTTP Basic Auth login box.
@@ -338,7 +360,8 @@ sub _getFeedUrl {
 
 =head2 _getStaticFeedUrl ($extension)
 
-Generic method for returning the static URL for a type of feed.
+Generic method for returning the static URL for a type of feed.  The returned URL will be complete,
+and absolute, containing the gateway URL for this site.
 
 =head3 $extension
 
@@ -483,7 +506,7 @@ sub getFeed {
     $feed->description( $self->get('feedDescription') || $self->get('synopsis') );
     $feed->pubDate( $self->getContentLastModified );
     $feed->copyright( $self->get('feedCopyright') );
-    $feed->link( $self->getUrl );
+    $feed->link( $self->session->url->getSiteURL . $self->getUrl );
     # $feed->language( $lang );
     if ($self->get('feedImage')) {
         my $storage = WebGUI::Storage->get($self->session, $self->get('feedImage'));

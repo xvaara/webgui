@@ -456,8 +456,8 @@ ipAddress etc?|,
 
     'default value description' => {
         message => q|Enter the default value (if any) for the field. If you have defined the possible values for
-this field using a hash, then the default value has to be a key in that hash, and not a value. For Yes/No fields, enter "yes" to select "Yes" and "no" to select "No".|,
-        lastUpdated => 1223372150,
+this field using a hash, then the default value has to be a key in that hash, and not a value. For Yes/No fields, enter "yes" to select "Yes" and "no" to select "No". For Date and Date/Time fields, enter an epoch date, or a date in YYYY-MM-DD HH:MM:SS, the ISO 9601 format with optional time|,
+        lastUpdated => 1309814047,
     },
 
     'default value subtext' => {
@@ -584,14 +584,12 @@ you wish to appear, one per line. <br />
 <br />If you want a different label for a value, the possible values list has to be
 formatted as follows:
 <pre>
-&#123;
-   "key1"=>"value1",
-   "key2"=>"value2",
-   "key3"=>"value3"
+   key1|value1
+   key2|value2
+   key3|value3
    ...
-&#125;
 </pre>
-Braces, quotes and all.  You simply replace "key1"/"value1" with your own name/value pairs},
+Simply replace "key1"/"value1" with your own name/value pairs},
         lastUpdated => 1223372150,
     },
 
@@ -658,6 +656,12 @@ Braces, quotes and all.  You simply replace "key1"/"value1" with your own name/v
     'canEditThings' => {
         message => q|Is true if the current user can view the Things that are defined for this Thingy Asset|,
         lastUpdated => 1104630516,
+        context => q|Description of a tmpl_var for the template help.|,
+    },
+
+    'searchResult_json' => {
+        message => q|JSON-encoded version of searchResult_loop so that you can access the data in Javascript|,
+        lastUpdated => 1285094918,
         context => q|Description of a tmpl_var for the template help.|,
     },
 
@@ -914,8 +918,8 @@ below/after the form element.|,
     },
 
     'viewScreenTitle' => {
-        message => q|The title for the view screen|,
-        lastUpdated => 1104630516,
+        message => q|The title for the view screen.  This is the concatenation of all values for fields which have View Screen Title set for this Thing.  If no fields are set, then the title is empty.|,
+        lastUpdated => 1298915023,
     },
 
     'import_url' => {
@@ -925,8 +929,7 @@ below/after the form element.|,
     },
 
     'export_url' => {
-        message => q|Url to export the data in a search result into a csv file. This is only available after a
-search has been done.|,
+        message => q|Url to export the all data in a thing into a csv file.|,
         lastUpdated => 1104630516,
         context => q|Description of a tmpl_var for the template help.|,
     },
@@ -972,8 +975,14 @@ search has been done.|,
     },
 
     'searchFields_is__fieldType__' => {
-        message => q|A boolean indicating wether this field is of type __fieldType__. The first letter of __fieldType__ is always uppercase. Example: for a select box the value of &lt;tmpl_var searchFields_isSelectBox&gt; is true.|,
+        message => q|A boolean indicating whether this field is of type __fieldType__. The first letter of __fieldType__ is always uppercase. Example: for a select box the value of &lt;tmpl_var searchFields_isSelectBox&gt; is true.|,
         lastUpdated => 1104630516,
+        context => q|Description of a tmpl_var for the template help.|,
+    },
+
+    'searchFields_listType' => {
+        message => q|A boolean indicating whether this field is a List type field.|,
+        lastUpdated => 1277849256,
         context => q|Description of a tmpl_var for the template help.|,
     },
 
@@ -1115,6 +1124,48 @@ search has been done.|,
     'other thing field missing message' => {
         message => q|The field from the other Thing does not exist.|,
         lastUpdated => 1231180362,
+    },
+
+    'Creating column headers' => {
+        message => q|Creating column headers.|,
+        lastUpdated => 1231180362,
+        context => q|Status message in the Export Thingy progress bar.|,
+    },
+
+    'Writing data' => {
+        message => q|Writing data.|,
+        lastUpdated => 1231180362,
+        context => q|Status message in the Export Thingy progress bar.|,
+    },
+
+    'Return to %s' => {
+        message => q|Return to %s.|,
+        lastUpdated => 1231180362,
+        context => q|Status message in the Export Thingy progress bar. %s is the name of the Thing that is being exported.|,
+    },
+
+    'variables by label' => {
+        message => q|In addition to the <b>field_loop</b>, field values may be directly accessed via their label.  Please check the documentation for the template plugin that you are using to handle odd characters like spaces or quotes in the label.|,
+        lastUpdated => 1231180362,
+        context => q|Template variable help for getViewThingData|,
+    },
+
+    'unique label' => {
+        message => q|Unique|,
+        lastUpdated => 1308006166,
+        context => q|Label in the edit field screen.|,
+    },
+
+    'unique description' => {
+        message => q|Is this a unique field?  In simple terms, values in unique fields can't have any duplicates in other rows.|,
+        lastUpdated => 1308006162,
+        context => q|Hoverhelp for edit field screen|,
+    },
+
+    'callerAssetId' => {
+        message => q|When passed into the www_viewThingData, provides the assetId of the caller asset.  Used by RenderThingMacro.  See POD.|,
+        lastUpdated => 0,
+        context => q|Template variable help for www_viewThingData|,
     },
 
 };

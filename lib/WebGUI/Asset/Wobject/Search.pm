@@ -181,13 +181,17 @@ sub view {
         value=>$keywords
     });
 	$var{'no_results'   } = $i18n->get("no results");
+    my $searchRoot = $self->getValue('searchRoot');
+    if (my $searchOverride = $form->get('searchroot', 'asset')) {
+        $searchRoot = $searchOverride;
+    }
 	
     if ($form->get("doit")) {
 		my $search = WebGUI::Search->new($session);
 		my %rules   = (
 			keywords =>$keywords, 
 			lineage  =>[
-                WebGUI::Asset->newByDynamicClass($session,$self->getValue("searchRoot"))->get("lineage")
+                WebGUI::Asset->newByDynamicClass($session, $searchRoot)->get("lineage"),
             ],
 		);
 		my @classes     = split("\n",$self->get("classLimiter"));
@@ -195,7 +199,7 @@ sub view {
 		$search->search(\%rules);
 		
         #Instantiate the highlighter
-        my @words     = split(/\s+/,$keywords);
+        my @words     = grep { $_ ne '' } map { tr/+?*:()[]{}//d; $_; } split(/\s+/,$keywords);
         my @wildcards = map { "%" } @words;
         my $hl = HTML::Highlight->new(
             words     => \@words,
@@ -209,29 +213,31 @@ sub view {
         );
 
         my @results   = ();
-        foreach my $data (@{$p->getPageData}) {
-            next unless (
+        ENTRY: foreach my $data (@{$p->getPageData}) {
+            next ENTRY unless (
                 $user->userId eq $data->{ownerUserId}
                 || $user->isInGroup($data->{groupIdView})
                 || $user->isInGroup($data->{groupIdEdit})
             );
 
             my $asset = WebGUI::Asset->new($session, $data->{assetId}, $data->{className});
-            if (defined $asset) {
-                my $properties = $asset->get;
-                if ($self->get("useContainers")) {
-                    $properties->{url} = $asset->getContainer->get("url");
-                }
-                #Add highlighting
-                $properties->{'title'               } = $hl->highlight($properties->{title} || '');
-                $properties->{'title_nohighlight'   } = $properties->{title};
-                my $synopsis = $data->{'synopsis'} || '';
-                WebGUI::Macro::process($self->session, \$synopsis);
-                $properties->{'synopsis'            } = $hl->highlight($synopsis);
-                $properties->{'synopsis_nohighlight'} = $synopsis;
-                push(@results, $properties);
-                $var{results_found} = 1;
-            } 
+            next ENTRY unless defined $asset;
+            my $properties = $asset->get;
+            ##Overlay the asset properties with the original data to handle sub-entries for assets
+            $properties = { %{ $properties }, %{ $data} };
+            if ( $self->get("useContainers") && $asset->getContainer->canView ) {
+                $properties->{url} = $asset->isa('WebGUI::Asset::Post::Thread') ? $asset->getCSLinkUrl()
+                                   :                                              $asset->getContainer->get("url");
+            }
+            #Add highlighting
+            $properties->{'title'               } = $hl->highlight($properties->{title} || '');
+            $properties->{'title_nohighlight'   } = $properties->{title};
+            my $synopsis = $properties->{'synopsis'} || '';
+            WebGUI::Macro::process($self->session, \$synopsis);
+            $properties->{'synopsis'            } = $hl->highlight($synopsis);
+            $properties->{'synopsis_nohighlight'} = $synopsis;
+            push(@results, $properties);
+            $var{results_found} = 1;
 		}
 
         $var{result_set} = \@results;

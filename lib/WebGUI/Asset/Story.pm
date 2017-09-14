@@ -21,8 +21,6 @@ use Tie::IxHash;
 use WebGUI::Utility;
 use WebGUI::International;
 use JSON qw/from_json to_json/;
-use Storable qw/dclone/;
-use Data::Dumper;
 
 =head1 NAME
 
@@ -70,15 +68,8 @@ sub addRevision {
     my $session = $self->session;
     my $newSelf = $self->next::method(@_);
 
-    my $newProperties = {
-        isHidden => 1,
-    };
-
-    $newSelf->update($newProperties);
-
     my $newPhotoData = $newSelf->duplicatePhotoData;
     $newSelf->setPhotoData($newPhotoData);
-    #$newSelf->requestAutoCommit;
 
     return $newSelf;
 }
@@ -236,6 +227,26 @@ sub exportAssetData {
         push @{ $exportData->{storage} }, $photo->{storageId};
     }
     return $exportData;
+}
+
+#-------------------------------------------------------------------
+
+=head2 exportGetRelatedAssetIds
+
+Overriden to include any topics in which this story would appear.
+
+=cut
+
+sub exportGetRelatedAssetIds {
+    my $self = shift;
+    my $rel  = $self->SUPER::exportGetRelatedAssetIds(@_);
+    push @$rel, @{
+        WebGUI::Keyword->new($self->session)->getMatchingAssets({
+            keywords => WebGUI::Keyword::string2list($self->get('keywords')),
+            isa      => 'WebGUI::Asset::Wobject::StoryTopic',
+        })
+    };
+    return $rel;
 }
 
 #-------------------------------------------------------------------
@@ -429,6 +440,9 @@ sub getEditForm {
                             value => $i18n->get('save and add another photo'),
                           }),
     };
+    if ($session->setting->get('metaDataEnabled')) {
+        $var->{metadata} = $self->getMetaDataAsFormFields;
+    }
     $var->{ photo_form_loop } = [];
     ##Provide forms for the existing photos, if any
     ##Existing photos get a delete Yes/No.
@@ -438,12 +452,16 @@ sub getEditForm {
     foreach my $photoIndex (1..$numberOfPhotos) {
         my $photo   = $photoData->[$photoIndex-1];
         my $storage = WebGUI::Storage->get($session, $photo->{storageId});
-        my $filename = $storage->getFiles->[0];
+        my $filename = $storage && $storage->getFiles->[0];
         push @{ $var->{ photo_form_loop } }, {
             hasPhoto       => $filename ? 1                                    : 0, 
             imgThumb       => $filename ? $storage->getThumbnailUrl($filename) : '', 
             imgUrl         => $filename ? $storage->getUrl($filename)          : '', 
             imgFilename    => $filename ? $filename                            : '',
+            imgRemoteUrlForm => WebGUI::Form::text($session, {
+                                 name  => 'imgRemoteUrl'.$photoIndex,
+                                 value => $photo->{remoteUrl},
+                              }),
             newUploadForm  => WebGUI::Form::file($session, {
                                 name => 'newPhoto' . $photoIndex,
                                 maxAttachments => 1,
@@ -475,6 +493,9 @@ sub getEditForm {
         };
     }
     push @{ $var->{ photo_form_loop } }, {
+        imgRemoteUrlForm => WebGUI::Form::text($session, {
+                             name  => 'imgRemoteUrl',
+                          }),
         newUploadForm  => WebGUI::Form::image($session, {
                              name           => 'newPhoto',
                              maxAttachments => 1,
@@ -516,12 +537,10 @@ Returns the photo hash formatted as perl data.  See also L<setPhotoData>.
 
 sub getPhotoData {
 	my $self     = shift;
-	if (!exists $self->{_photoData}) {
-        my $json = $self->get('photo');
-        $json ||= '[]';
-        $self->{_photoData} = from_json($json);
-	}
-	return dclone($self->{_photoData});
+    my $json = $self->get('photo');
+    $json ||= '[]';
+    my $photoData = from_json($json);
+	return $photoData;
 }
 
 #-------------------------------------------------------------------
@@ -534,13 +553,17 @@ property of the Asset.
 =cut
 
 sub getRssData {
-	my $self = shift;
+	my $self    = shift;
+    my $session = $self->session;
+    my $url     = $session->url->getSiteURL.$self->getUrl;
     my $data = {
         title       => $self->get('headline') || $self->getTitle,
-        description => $self->get('subtitle'),
-        'link'      => $self->getUrl,
+        description => $self->get('story'),
+        'link'      => $url,
+        guid        => $url,
         author      => $self->get('byline'),
         date        => $self->get('lastModified'),
+        pubDate     => $session->datetime->epochToMail($self->get('creationDate')),
     };
 	return $data;
 }
@@ -598,8 +621,6 @@ sub processPropertiesFromFormPost {
     my $session = $self->session;
     $self->next::method;
     my $archive = delete $self->{_parent};  ##Force a new lookup.
-    #$session->log->warn($self->getParent->get('className'));
-    #$session->log->warn($self->getParent->getParent->get('className'));
     my $form    = $session->form;
     ##Handle old data first, to avoid iterating across a newly added photo.
     my $photoData      = $self->getPhotoData;
@@ -608,16 +629,20 @@ sub processPropertiesFromFormPost {
     PHOTO: foreach my $photoIndex (1..$numberOfPhotos) {
         ##TODO: Deletion check and storage cleanup
         my $storageId = $photoData->[$photoIndex-1]->{storageId};
+        my $storage = $storageId && WebGUI::Storage->get($session, $storageId);
+        my $remote = $form->process("imgRemoteUrl$photoIndex");
         if ($form->process('deletePhoto'.$photoIndex, 'yesNo')) {
-            my $storage = WebGUI::Storage->get($session, $storageId);
             $storage->delete if $storage;
             splice @{ $photoData }, $photoIndex-1, 1;
             next PHOTO;
         }
+        ##Process photos with urls that replace existing photos
+        if ($remote) {
+            $storage->delete() if $storage;
+        }
         ##Process uploads that replace existing photos
-        if (my $uploadId = $form->process('newPhoto'.$photoIndex,'File')) {
+        elsif (my $uploadId = $form->process('newPhoto'.$photoIndex,'File')) {
             my $upload   = WebGUI::Storage->get($session, $uploadId);
-            my $storage  = WebGUI::Storage->get($session, $storageId);
             $storage->clear;
             my $filename = $upload->getFiles->[0];
             $storage->addFileFromFilesystem($upload->getPath($filename));
@@ -628,31 +653,43 @@ sub processPropertiesFromFormPost {
             $upload->delete;
         }
         my $newPhoto = {
-            storageId => $storageId,
             caption   => $form->process('imgCaption'.$photoIndex, 'text'),
             alt       => $form->process('imgAlt'    .$photoIndex, 'text'),
             title     => $form->process('imgTitle'  .$photoIndex, 'text'),
             byLine    => $form->process('imgByline' .$photoIndex, 'text'),
             url       => $form->process('imgUrl'    .$photoIndex, 'url' ),
         };
+        if ($remote) {
+            $newPhoto->{remoteUrl} = $remote;
+        }
+        else {
+            $newPhoto->{storageId} = $storageId;
+        }
         splice @{ $photoData }, $photoIndex-1, 1, $newPhoto;
     }
     my $newStorageId = $form->process('newPhoto', 'image');
-    if ($newStorageId) {
-        my $newStorage = WebGUI::Storage->get($session, $newStorageId);
-        my $photoName = $newStorage->getFiles->[0];
-        my ($width, $height) = $newStorage->getSizeInPixels($photoName);
-        if ($width > $self->getArchive->get('photoWidth')) {
-            $newStorage->resize($photoName, $self->getArchive->get('photoWidth'));
-        }
-        push @{ $photoData }, {
+    my $newRemote    = $form->process('imgRemoteUrl');
+    if ($newStorageId || $newRemote) {
+        my $newPhoto = {
             caption   => $form->process('newImgCaption', 'text'),
             alt       => $form->process('newImgAlt',     'text'),
             title     => $form->process('newImgTitle',   'text'),
             byLine    => $form->process('newImgByline',  'text'),
             url       => $form->process('newImgUrl',     'url'),
-            storageId => $newStorageId,
         };
+        if ($newRemote) {
+            $newPhoto->{remoteUrl} = $newRemote;
+        }
+        else {
+            my $newStorage = WebGUI::Storage->get($session, $newStorageId);
+            my $photoName = $newStorage->getFiles->[0];
+            my ($width, $height) = $newStorage->getSizeInPixels($photoName);
+            if ($width > $self->getArchive->get('photoWidth')) {
+                $newStorage->resize($photoName, $self->getArchive->get('photoWidth'));
+            }
+            $newPhoto->{storageId} = $newStorageId;
+        }
+        push @{ $photoData }, $newPhoto;
     }
     $self->setPhotoData($photoData);
     $self->{_parent} = $archive;  ##Restore archive, for URL and other calculations
@@ -672,7 +709,7 @@ sub purge {
     ##Delete all storage locations from all revisions of the Asset
     my $sth = $self->session->db->read("select photo from Story where assetId=?",[$self->getId]);
     STORAGE: while (my ($json) = $sth->array) {
-        my $photos = from_json($json);
+        my $photos = from_json($json || '[]');
         PHOTO: foreach my $photo (@{ $photos }) {
             next PHOTO unless $photo->{storageId};
             my $storage = WebGUI::Storage->get($self->session,$photo->{storageId});
@@ -694,8 +731,9 @@ Remove the storage locations for this revision of the Asset.
 sub purgeRevision {
 	my $self    = shift;
     my $session = $self->session;
-    foreach my $photo ( @{ $self->getPhotoData} ) {
-        my $storage = WebGUI::Storage->get($session, $self-$photo->{storageId});
+    PHOTO: foreach my $photo ( @{ $self->getPhotoData} ) {
+        my $id = $photo->{storageId} or next PHOTO;
+        my $storage = WebGUI::Storage->get($session, $id);
         $storage->delete if $storage;
     }
 	return $self->next::method;
@@ -754,7 +792,6 @@ sub setPhotoData {
     my $photo     = to_json($photoData);
     ##Update the db.
     $self->update({photo => $photo});
-    delete $self->{_photoData};
     return;
 }
 
@@ -815,7 +852,6 @@ Extend the superclass to make sure that the asset always stays hidden from navig
 sub update {
     my $self   = shift;
     my $properties = shift;
-    #$self->session->log->warn('story update');
     return $self->next::method({%$properties, isHidden => 1});
 }
 
@@ -880,13 +916,23 @@ sub viewTemplateVariables {
         }
     }
 
-    my $key = WebGUI::Keyword->new($session);
-    my $keywords = $key->getKeywordsForAsset( { asArrayRef => 1, asset => $self  });
+    my $isExporting  = $session->scratch->get('isExporting');
+    my $key        = WebGUI::Keyword->new($session);
+    my $keywords   = $key->getKeywordsForAsset( { asArrayRef => 1, asset => $self  });
     $var->{keyword_loop} = [];
+    my $parent     = $self->getParent;
+    my $upwards    = $parent->isa('WebGUI::Asset::Wobject::StoryArchive')
+                   ? ''       #In parallel with the Keywords files
+                   : '../'    #Keywords files are one level up
+                   ;
     foreach my $keyword (@{ $keywords }) {
+        my $keyword_url = $isExporting
+                        ? $upwards . $archive->getKeywordFilename($keyword)
+                        : $archive->getUrl("func=view;keyword=".$session->url->escape($keyword))
+                        ;
         push @{ $var->{keyword_loop} }, {
             keyword => $keyword,
-            url     => $archive->getUrl("func=view;keyword=".$session->url->escape($keyword)),
+            url     => $keyword_url,
         };
     }
     $var->{updatedTime}      = $self->formatDuration();
@@ -897,11 +943,19 @@ sub viewTemplateVariables {
     $var->{photo_loop}       = [];
     my $photoCounter = 0;
     PHOTO: foreach my $photo (@{ $photoData }) {
-        next PHOTO unless $photo->{storageId};
-        my $storage  = WebGUI::Storage->get($session, $photo->{storageId});
-        my $file = $storage->getFiles->[0];
-        next PHOTO unless $file;
-        my $imageUrl = $storage->getUrl($file);
+        my $imageUrl;
+        if (my $remote = $photo->{remoteUrl}) {
+            $imageUrl = $remote;
+        }
+        elsif (my $id = $photo->{storageId}) {
+            my $storage  = WebGUI::Storage->get($session, $photo->{storageId});
+            my $file = $storage->getFiles->[0];
+            next PHOTO unless $file;
+            $imageUrl = $storage->getUrl($file);
+        }
+        else {
+            next PHOTO;
+        }
         push @{ $var->{photo_loop} }, {
             imageUrl     => $imageUrl,
             imageCaption => $photo->{caption},

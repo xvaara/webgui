@@ -8,19 +8,19 @@
 # http://www.plainblack.com                     info@plainblack.com
 #-------------------------------------------------------------------
 
-# ---- BEGIN DO NOT EDIT ----
 use FindBin;
 use strict;
 use lib "$FindBin::Bin/../lib";
 
 use WebGUI::Test;
 use WebGUI::Session;
+use WebGUI::Macro::D_date;
 use Data::Dumper;
-# ---- END DO NOT EDIT ----
 
-use Test::More; # increment this value for each test you create
+use Test::More;
+use Test::Exception;
 
-my $wgbday = 997966800;
+my $wgbday = WebGUI::Test->webguiBirthday;
 
 my @testSets = (
 	{
@@ -29,20 +29,13 @@ my @testSets = (
 	},
 	{
 		format => '',
-		output =>'8/16/2001  8:00 am',
+		output =>'8/16/2001 8:00 am',
 	},
 );
 
-my $numTests = scalar @testSets + 1 + 1;
+my $numTests = scalar @testSets + 4;
 
 plan tests => $numTests;
-
-my $macro = 'WebGUI::Macro::D_date';
-my $loaded = use_ok($macro);
-
-SKIP: {
-
-skip "Unable to load $macro", $numTests-1 unless $loaded;
 
 my $session = WebGUI::Test->session;
 
@@ -66,4 +59,12 @@ while ($time1 != $time2) {
 
 is($output, $session->datetime->epochToHuman($time1), 'checking default time and format');
 
-}
+##Checking for edge case, time=0
+is WebGUI::Macro::D_date::process($session, '', 0),
+    '12/31/1969 6:00 pm',
+    '...checking for handling time=0';
+
+lives_ok { WebGUI::Macro::D_date::process($session, '', '   0') }
+    'handles leading whitespace okay';
+lives_ok { WebGUI::Macro::D_date::process($session, '', '0    ') }
+    'handles trailing whitespace okay';

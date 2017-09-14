@@ -96,7 +96,10 @@ sub approveAddRequest {
         status  => 'unread',
         sentBy  => $self->user->userId,
     });
-    $inbox->getMessage($invite->{messageId})->setStatus('completed');
+    my $message = $inbox->getMessage($invite->{messageId});
+    if ($message) {
+        $message->setStatus('completed');
+    }
     $db->deleteRow("friendInvitations", "inviteId", $inviteId);
 }
 
@@ -288,7 +291,7 @@ sub new {
 
 #-------------------------------------------------------------------
 
-=head2 rejectAddRequest ( inviteId )
+=head2 rejectAddRequest ( inviteId[,sendNotification] )
 
 Sends a rejection notice, and deletes the invitation.
 
@@ -296,22 +299,34 @@ Sends a rejection notice, and deletes the invitation.
 
 The id of an invitation.
 
+=head3 sendNotification
+
+Boolean indicating whether or not to send out the deny notification.  Defaults to true
+
 =cut
 
 sub rejectAddRequest {
-    my $self = shift;
+    my $self     = shift;
     my $inviteId = shift;
+    my $notify   = shift;
+
     my $db = $self->session->db;
     my $invite = $self->getAddRequest($inviteId);
     my $i18n = WebGUI::International->new($self->session, "Friends");
     my $inbox = WebGUI::Inbox->new($self->session);
-    $inbox->addMessage({
-        message => sprintf($i18n->get("friends invitation not accepted by user"), $self->user->getWholeName),
-        subject => $i18n->get('friends invitation not accepted'),
-        userId  => $invite->{inviterId},
-        status  => 'unread',
-    });
-    $inbox->getMessage($invite->{messageId})->setStatus('completed');
+    
+    unless (defined $notify && !$notify) {  #Notify is defined but not true
+        $inbox->addMessage({
+            message => sprintf($i18n->get("friends invitation not accepted by user"), $self->user->getWholeName),
+            subject => $i18n->get('friends invitation not accepted'),
+            userId  => $invite->{inviterId},
+            status  => 'unread',
+        });
+    }
+    my $invitation = $inbox->getMessage($invite->{messageId});
+    if ($invitation) {
+        $invitation->setStatus('completed');
+    }
     $self->session->db->deleteRow("friendInvitations", "inviteId", $inviteId);
 }
 
@@ -340,7 +355,7 @@ sub sendAddRequest {
     my $userId     = shift;
     my $comments   = shift;
     my $url        = $self->session->url;
-    my $inviteUrl  = shift || $url->append($url->getSiteURL,'op=account');
+    my $inviteUrl  = shift || $url->append($url->getSiteURL,$url->gateway('/','op=account'));
 
     my $i18n = WebGUI::International->new($self->session, "Friends");
 
@@ -353,7 +368,7 @@ sub sendAddRequest {
     $inviteUrl = $url->append($inviteUrl,'inviteId='.$inviteId);
 
     # Build the message
-    my $messageText = sprintf $i18n->get("invitation approval email"), $self->user->getWholeName, $self->session->url->getSiteURL, $comments, $inviteUrl;
+    my $messageText = sprintf $i18n->get("invitation approval email"), $self->user->getWholeName, $self->session->url->getSiteURL.$url->gateway('/'), $comments, $inviteUrl;
 
     # send message
     my $message = WebGUI::Inbox->new($self->session)->addMessage({

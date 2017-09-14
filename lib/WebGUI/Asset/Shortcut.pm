@@ -38,6 +38,9 @@ sub _drawQueryBuilder {
 			"!=" => $i18n->get("isnt")
 		};
 	}
+	$operator{checkList} = {
+		"+~" => $i18n->get("contains"),
+	};
 	$operator{integer} = {
 		"=" => $i18n->get("equal to"),
 		"!=" => $i18n->get("not equal to"),
@@ -65,7 +68,7 @@ sub _drawQueryBuilder {
 			"AND" => $i18n->get("AND"),
 			"OR" => $i18n->get("OR")},
 			value=>["OR"],
-			extras=>'class="qbselect"',
+			extras=>'class="qbselect" '. $self->{_disabled},
 		}
 	);
 
@@ -77,6 +80,7 @@ sub _drawQueryBuilder {
 
 	# Here starts the field loop
 	my $i = 1;
+    my $addLabel = $i18n->get('add', 'Asset_Wobject');
 	foreach my $field (keys %$fields) {
 		my $fieldLabel = $fields->{$field}{fieldName};
 		my $fieldType = $fields->{$field}{fieldType} || "text";
@@ -87,24 +91,28 @@ sub _drawQueryBuilder {
 			name=>$opFieldName,
 			uiLevel=>5,
 			options=>$operator{$fieldType},
-			extras=>'class="qbselect"'
+			extras=>'class="qbselect" '. $self->{_disabled},
 		});
 		# The value select field
 		my $valFieldName = "val_field".$i;
         my $options = $fields->{$field}{possibleValues};
+        ##Only allow one at a time to be selected, and work with current JS for choosing which one.
+        $fieldType = 'radioList' if $fieldType eq 'checkList';
 		my $valueField = WebGUI::Form::dynamicField($session,
 			fieldType=>$fieldType,
 			name=>$valFieldName,
 			uiLevel=>5,
-			extras=>qq/title="$fields->{$field}{description}" class="qbselect"/,
+			extras=>qq/title="$fields->{$field}{description}" class="qbselect" /. $self->{_disabled},
 			options=>$options,
 		);
 		# An empty row
 		$output .= qq|<tr><td></td><td></td><td></td><td></td><td class="qbtdright"></td></tr>|;
 
 		# Table row with field info
+        my $disabled = $self->{_disabled};
+        my $odd_row = $i % 2 ? q{class="qbtr_alt"} : "";
 		$output .= qq|
-		<tr>
+		<tr $odd_row>
 		<td class="qbtdleft"><p class="qbfieldLabel">$fieldLabel</p></td>
 		<td class="qbtd">
 		$opField
@@ -114,7 +122,7 @@ sub _drawQueryBuilder {
 		</td>
 		<td class="qbtd"></td>
 		<td class="qbtdright">
-		<input class="qbButton" type=button value=Add onclick="addCriteria('$fieldLabel', this.form.$opFieldName, this.form.$valFieldName)"></td>
+		<input class="qbButton" type=button value=$addLabel onclick="addCriteria('$fieldLabel', this.form.$opFieldName, this.form.$valFieldName)" $disabled></td>
 		</tr>
 		|;
 		$i++;
@@ -270,7 +278,7 @@ sub getContentLastModified {
     my $shortcut = $self->getShortcut;
     my $shortcuttedRev;
     if (defined $shortcut) {
-        $shortcuttedRev = $shortcut->get('revisionDate');
+        $shortcuttedRev = $shortcut->getContentLastModified;
         return $assetRev > $shortcuttedRev ? $assetRev : $shortcuttedRev;
     } else {
         return 0;
@@ -310,19 +318,12 @@ sub getEditForm {
 	);
 	if($self->session->setting->get("metaDataEnabled")) {
 		$tabform->getTab("properties")->yesNo(
-			-name=>"shortcutByCriteria",
-			-value=>$self->getValue("shortcutByCriteria"),
-			-label=>$i18n->get("Shortcut by alternate criteria"),
-			-hoverHelp=>$i18n->get("Shortcut by alternate criteria description"),
-			-extras=>q|onchange="
-				if (this.form.shortcutByCriteria[0].checked) { 
- 					this.form.resolveMultiples.disabled=false;
-					this.form.shortcutCriteria.disabled=false;
-				} else {
- 					this.form.resolveMultiples.disabled=true;
-					this.form.shortcutCriteria.disabled=true;
-				}"|
-                );
+			-name     => "shortcutByCriteria",
+			-value    => $self->getValue("shortcutByCriteria"),
+			-label    => $i18n->get("Shortcut by alternate criteria"),
+			-hoverHelp=> $i18n->get("Shortcut by alternate criteria description"),
+			-extras   => q|onchange="wgCriteriaDisable(this.form, this.form.shortcutByCriteria[0].checked)"|,
+        );
 		$tabform->getTab("properties")->yesNo(
 			-name=>"disableContentLock",
 			-value=>$self->getValue("disableContentLock"),
@@ -384,7 +385,6 @@ sub getFieldsList {
 	foreach my $field (@{WebGUI::ProfileField->getFields($session)}) {
 		my $fieldId = $field->getId;
 		next if $fieldId =~ /contentPositions/;
-        $session->log->warn($fieldId);
 		$fieldNames{$fieldId} = $field->getLabel.' ['.$fieldId.']';
 	}
 	$output .= '<table cellspacing="0" cellpadding="3" border="1"><tr><td><table cellspacing="0" cellpadding="3" border="0">';
@@ -398,8 +398,6 @@ sub getFieldsList {
 		-vertical=>1,
 		-uiLevel=>9
 	);
-    $session->log->warn($list->get('uiLevel'));
-    $session->log->warn($list->passUiLevelCheck);
 	$output .= $list->toHtmlWithWrapper;
 	$output .= '</table></td><td><table cellspacing="0" cellpadding="3" border="0">';
 	my @prefFieldsToImport = $self->getPrefFieldsToImport;
@@ -608,8 +606,8 @@ sub getShortcutByCriteria {
 	# |              |             |
 	# |- $field      |_ $operator  |- $value
 	# |_ $attribute                |_ $attribute
-	my $operator = qr/<>|!=|=|>=|<=|>|<|like/i;
-	my $attribute = qr/['"][^()|=><!]+['"]|[^()|=><!\s]+/i; 
+    my $operator = qr/<>|!=|=|>=|<=|>|<|like|\+~/i;
+    my $attribute = qr/['"][^()|=><!]+['"]|[^()|=><!\s]+/i; 
                                                                                                       
 	my $constraint = $criteria;
 	
@@ -617,16 +615,19 @@ sub getShortcutByCriteria {
 	my $db = $self->session->db;
 	my $counter = "b";
 	my @joins = ();
+    ##Transform the expression into valid SQL
 	foreach my $expression ($criteria =~ /($attribute\s*$operator\s*$attribute)/gi) {
 		# $expression will match "State = Wisconsin"
 
         	my $replacement = $expression;	# We don't want to modify $expression.
 						# We need it later.
-		push(@joins," left join metaData_values ".$counter."_v on a.assetId=".$counter."_v.assetId ");
+		my $alias = $counter . '_v';
+		push(@joins," left join metaData_values $alias on a.assetId=$alias.assetId and d.revisionDate = $alias.revisionDate ");
 		# Get the field (State) and the value (Wisconsin) from the $expression.
-	        $expression =~ /($attribute)\s*$operator\s*($attribute)/gi;
+	        $expression =~ /($attribute)\s*($operator)\s*($attribute)/gi;
 	        my $field = $1;
-	        my $value = $2;
+            my $current_operator = $2;
+	        my $value = $3;
 
 		# quote the field / value variables.
 		my $quotedField = $field;
@@ -634,24 +635,32 @@ sub getShortcutByCriteria {
 		unless ($field =~ /^\s*['"].*['"]\s*/) {
 			$quotedField = $db->quote($field);
 		}
-                unless ($value =~ /^\s*['"].*['"]\s*/) {
-                        $quotedValue = $db->quote($value);
-                }
+        unless ($value =~ /^\s*['"].*['"]\s*/) {
+            $quotedValue = $db->quote($value);
+        }
 		
 		# transform replacement from "State = Wisconsin" to 
 		# "(fieldname=State and value = Wisconsin)"
 		my $clause = "(".$counter."_p.fieldName=".$quotedField." and ".$counter."_v.value ";
-	        $replacement =~ s/\Q$field/$clause/;
-	        $replacement =~ s/\Q$value/$quotedValue )/i;
+        $replacement =~ s/\Q$field/$clause/;
+        $replacement =~ s/\Q$value/$quotedValue )/i;
 
 		# replace $expression with the new $replacement in $constraint.
-	        $constraint =~ s/\Q$expression/$replacement/;
+        $constraint =~ s/\Q$expression/$replacement/;
+        if ($current_operator eq '+~') {
+            $constraint =~ s/and ${counter}_v\.value\s*\+~\s*$quotedValue/and FIND_IN_SET($quotedValue, REPLACE(${counter}_v.value,"\\n",","))/;
+        }
 		push (@joins, " left join metaData_properties ".$counter."_p on ".$counter."_p.fieldId=".$counter."_v.fieldId ");
 		$counter++;
 	}
 
 	my $sql = "select a.assetId from asset a
-			".join("\n", @joins)."
+               left join assetData d on a.assetId = d.assetId
+                   and d.revisionDate=(
+                       select max(revisionDate)
+                       from assetData d2
+                       where d2.assetId = a.assetId
+                   ) ".join("\n", @joins)."
 			where a.className = ".$db->quote($self->getShortcutDefault->get("className"));
 	# Add constraint only if it has been modified.
 	$sql .= " and ".$constraint if (($constraint ne $criteria) && $constraint ne "");
@@ -794,6 +803,19 @@ sub notLinked {
 
 #-------------------------------------------------------------------
 
+=head2 paste ( )
+
+Pasting assets under a Shortcut can cause lots of problems, including infinite loops
+for operations like paste, and purge.
+
+=cut
+
+sub paste {
+    return 0;
+}
+
+#-------------------------------------------------------------------
+
 =head2 prepareView ( )
 
 See WebGUI::Asset::prepareView() for details.  Extends the base class to call prepareView
@@ -910,9 +932,13 @@ sub view {
 		}
 	}
 	
-	if ($self->get("shortcutToAssetId") eq $self->get("parentId")) {
-		$content = $i18n->get("Displaying this shortcut would cause a feedback loop");
-	} else {
+    if ($self->get("shortcutToAssetId") eq $self->get("parentId")) {
+        $content = $i18n->get("Displaying this shortcut would cause a feedback loop");
+    }
+    elsif (! $shortcut->canView) {
+        $content = '';
+    }
+    else {
         # Make sure the www_view method won't be skipped b/c the asset is cached.
         $shortcut->purgeCache();
 
@@ -1227,10 +1253,12 @@ Render the shortcut in standalone mode.
 =cut
 
 sub www_view {
-        my $self = shift;
-        my $check = $self->checkView;
+        my $self    = shift;
+        my $session = $self->session;
+        my $check   = $self->checkView;
         return $check if defined $check;
         my $shortcut = $self->getShortcut;
+        return $session->privilege->noAccess() unless $shortcut->canView;
         $self->prepareView;
 
         # Make sure the www_view method won't be skipped b/c the asset is cached.

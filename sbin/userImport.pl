@@ -10,14 +10,16 @@
 # http://www.plainblack.com                     info@plainblack.com
 #-------------------------------------------------------------------
 
-our ($webguiRoot);
+use strict;
+use File::Basename ();
+use File::Spec;
 
+my $webguiRoot;
 BEGIN {
-	$webguiRoot = "..";
-	unshift (@INC, $webguiRoot."/lib");
+    $webguiRoot = File::Spec->rel2abs(File::Spec->catdir(File::Basename::dirname(__FILE__), File::Spec->updir));
+    unshift @INC, File::Spec->catdir($webguiRoot, 'lib');
 }
 
-use strict;
 use Digest::MD5;
 use Getopt::Long;
 use Pod::Usage;
@@ -80,7 +82,7 @@ if (!($^O =~ /^Win/i) && $> != 0 && !$override) {
 print "Starting up..." unless ($quiet);
 my $session = WebGUI::Session->open($webguiRoot,$configFile);
 $session->user({userId=>3});
-open(FILE,"<".$usersFile);
+open(FILE,"<".$usersFile) || die("Could not open $usersFile for reading: $!");
 print "OK\n" unless ($quiet);
 
 my $lineNumber = 0;
@@ -88,6 +90,7 @@ my @field;
 my @profileFields = $session->db->buildArray("select fieldName from userProfileField");
 while(my $line = <FILE>) {
     $lineNumber++;
+
     chomp $line;
     next
         if $line eq '';
@@ -186,7 +189,25 @@ while(my $line = <FILE>) {
         }
         if ($user{groups}) {
             my @groups = split(/,/,$user{groups});
-            $u->addToGroups(\@groups,$user{expireOffset});
+            # Groups that have : in them have unique expiration dates
+            $u->addToGroups([grep { !/:/ } @groups],$user{expireOffset});
+            for my $groupDef ( grep { /:/ } @groups ) {
+                my ( $groupId, $expireDate ) = split /:/, $groupDef, 2;
+
+                # Calculate expiration offset
+                my $dtparse = DateTime::Format::Strptime->new(
+                    pattern     => '%F %T',
+                    on_error    => 'croak',
+                );
+
+                eval { 
+                    my $expireOffset = $dtparse->parse_datetime( $expireDate )->epoch - time;
+                    $u->addToGroups( [$groupId], $expireOffset );
+                };
+                if ( $@ ) {
+                    print "Could not add user $user{username} to group $groupId: $@";
+                }
+            }
         }
     }
 }
@@ -272,15 +293,22 @@ names are:
 =over
 
 =item B<username>
+
 =item B<password>
+
 =item B<authMethod>
+
 =item B<status>
+
 =item B<ldapUrl>
+
 =item B<connectDN>
+
 =item B<groups>
+
 =item B<expireOffset>
-=item Any valid User Profile field name available in WebGUI's database,
-      e.g. B<firstName>, B<lastName>, B<mail>, etc.
+
+=item Any valid User Profile field name available in WebGUI's database, e.g. B<firstName>, B<lastName>, B<mail>, etc.
 
 =back
 
@@ -352,6 +380,12 @@ Specify a comma separated list of WebGUI Group Ids that each loaded
 user will be set to. It can be overridden in the import file for
 specific users.
 
+You can specify a unique expiration date for a group by adding it
+after the group ID, separated by a colon. The date/time should be in
+"YYYY-MM-DD HH:NN:SS" format.
+
+ groupId:2000-01-01 01:00:00,groupId2:2001-01-02 02:00:00
+
 =item B<--ldapUrl uri>
 
 Specify the URI used to connect to the LDAP server for authentication.
@@ -362,7 +396,7 @@ It can be overridden in the import file for specific users.
 =item B<--identifier string>
 
 Specify the default password to use for loaded users. It can (and should)
-be overriden in the import file for specific users. If left unspecified,
+be overridden in the import file for specific users. If left unspecified,
 it defaults to B<123qwe>.
 
 =item B<--status status>

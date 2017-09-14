@@ -35,7 +35,8 @@ readonly userId => my %userId;
 
 =head2 adjust ( amount, [ comment ] )
 
-Adjusts the amount of credit this user has by a specified amount.
+Adjusts the amount of credit this user has by a specified amount.  Returns 0 if the current user is Visitor.
+Otherwise, returns the amount set.
 
 =head3 amount
 
@@ -49,8 +50,11 @@ The reason for this adjustment.
 
 sub adjust {
     my ($self, $amount, $comment) = @_;
+    my $user = WebGUI::User->new($self->session, $self->userId);
+    return 0 if $user->isVisitor;
     $self->session->db->write("insert into shopCredit (creditId, userId, amount, comment, dateOfAdjustment) values (?,?,?,?,now())",
         [$self->session->id->generate, $self->userId, $amount, $comment]);
+    return $amount;
 }
 
 #-------------------------------------------------------------------
@@ -151,6 +155,20 @@ sub new {
 
 #-------------------------------------------------------------------
 
+=head2 purge ( )
+
+Removes all shop credit for the current user.
+
+=cut
+
+sub purge {
+    my ($self) = @_;
+    $self->session->db->write("delete from shopCredit where userId = ?",[$self->userId]);
+    return 1;
+}
+
+#-------------------------------------------------------------------
+
 =head2 session () 
 
 Returns a reference to the current session.
@@ -179,11 +197,11 @@ sub www_adjust {
     my ($class, $session) = @_;
     my $admin = WebGUI::Shop::Admin->new($session);
     return $session->privilege->insufficient() unless $admin->canManage;
-    my $form = $session->form;
-    my $credit = $class->new($session, $form->get('userId'));
-    $credit->adjust($form->get('amount'), $form->get('comment'));
-    my $i18n = WebGUI::International->new($session, "Shop");
-    my $message = sprintf $i18n->get('add credit message'), $form->get('amount'), WebGUI::User->new($session, $form->get('userId'))->username, $credit->getSum;
+    my $form    = $session->form;
+    my $credit  = $class->new($session, $form->get('userId'));
+    my $amount  = $credit->adjust($form->get('amount'), $form->get('comment'));
+    my $i18n    = WebGUI::International->new($session, "Shop");
+    my $message = sprintf $i18n->get('add credit message'), $amount, WebGUI::User->new($session, $form->get('userId'))->username, $credit->getSum;
     return $class->www_manage($session, $message);
 }
 
@@ -199,14 +217,16 @@ sub www_manage {
     my ($class, $session, $message) = @_;
     my $admin = WebGUI::Shop::Admin->new($session);
     return $session->privilege->insufficient() unless $admin->canManage;
-    my $i18n = WebGUI::International->new($session, "Shop");
-    my $f = WebGUI::HTMLForm->new($session);
-    $f->hidden(name=>'shop',value=>'credit');
-    $f->hidden(name=>'method',value=>'adjust');
+    my $i18n   = WebGUI::International->new($session, "Shop");
+    my $f      = WebGUI::HTMLForm->new($session);
+    my $userId = $session->form->process('userId') || $session->user->userId;
+    my $user   = WebGUI::User->new($session, $userId);
+    $f->hidden(name => 'shop',   value => 'credit');
+    $f->hidden(name => 'method', value => 'adjust');
     $f->user(
         name    => 'userId',
         label   => $i18n->get('username'),
-        value   => $session->user->userId,
+        value   => $userId,
         );
     $f->float(
         name    => 'amount',
@@ -217,6 +237,10 @@ sub www_manage {
         label   => $i18n->get('notes'),
         );
     $f->submit;
+    if (! $message) {
+        my $credit = $class->new($session, $userId);
+        $message ||= sprintf $i18n->get('current credit message'), $user->username, $credit->getSum;
+    }
     return $admin->getAdminConsole->render($message.$f->print, $i18n->get('in shop credit'));
 }
 

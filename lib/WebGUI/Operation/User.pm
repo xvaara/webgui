@@ -277,7 +277,7 @@ sub getUserSearchForm {
 	$session->scratch->set("userSearchModifier",$session->form->process("modifier")) if defined($session->form->process("modifier"));
 	my $i18n = WebGUI::International->new($session);
 	my $output = '<div align="center">'
-		.WebGUI::Form::formHeader($session,)
+		.WebGUI::Form::formHeader($session,{ method => 'GET'}, )
 		.WebGUI::Form::hidden($session,
 			name => "op",
 			value => $op
@@ -414,6 +414,38 @@ sub www_ajaxCreateUser {
     return createServiceResponse( $outputFormat, {
         user        => $user->get,
     } );
+}
+
+#-------------------------------------------------------------------
+
+=head2 www_confirmUserEmail ( )
+
+Process links clicked from mails sent out by the WaitForUserConfmration
+workflow activity.
+
+=cut
+
+sub www_confirmUserEmail {
+    my $session    = shift;
+    my $f          = $session->form;
+    my $instanceId = $f->get('instanceId');
+    my $token      = $f->get('token');
+    my $actId      = $f->get('activityId');
+    my $activity   = WebGUI::Workflow::Activity->new($session, $actId)
+        or die;
+    my $instance   = WebGUI::Workflow::Instance->new($session, $instanceId)
+        or die;
+    if ($activity->confirm($instance, $token)) {
+        my $msg  = $activity->get('okMessage');
+        unless ($msg) {
+            my $i18n = WebGUI::International->new($session, 'WebGUI');
+            $msg = $i18n->get('ok');
+        }
+        return $session->style->userStyle($msg);
+    }
+    else {
+        return $session->privilege->noAccess;
+    }
 }
 
 #-------------------------------------------------------------------
@@ -626,27 +658,28 @@ sub www_editUser {
 	my $i18n = WebGUI::International->new($session, "WebGUI");
 	my %tabs;
 	tie %tabs, 'Tie::IxHash';
-	%tabs = (
-		"account"=> { label=>$i18n->get("account")},
-		"profile"=> { label=>$i18n->get("profile")},
-		"groups"=> { label=>$i18n->get('89')},
-		);
+    %tabs = (
+        "account"=> { label=>$i18n->get("account")},
+        "profile"=> { label=>$i18n->get("profile")},
+        "groups"=> { label=>$i18n->get('89')},
+    );
 	my $tabform = WebGUI::TabForm->new($session,\%tabs);
 	$tabform->formHeader({extras=>'autocomplete="off"'});	
 	my $u = WebGUI::User->new($session,($uid eq 'new') ? '' : $uid); #Setting uid to '' when uid is 'new' so visitor defaults prefill field for new user
 	my $username = ($u->isVisitor && $uid ne "1") ? '' : $u->username;
-    	$tabform->hidden({name=>"op",value=>"editUserSave"});
-    	$tabform->hidden({name=>"uid",value=>$uid});
-    	$tabform->getTab("account")->raw('<tr><td width="170">&nbsp;</td><td>&nbsp;</td></tr>');
-	$tabform->getTab("account")->readOnly(value=>$uid,label=>$i18n->get(378));
-    	$tabform->getTab("account")->readOnly(value=>$u->karma,label=>$i18n->get(537)) if ($session->setting->get("useKarma"));
-    	$tabform->getTab("account")->readOnly(value=>$session->datetime->epochToHuman($u->dateCreated,"%z"),label=>$i18n->get(453));
-    	$tabform->getTab("account")->readOnly(value=>$session->datetime->epochToHuman($u->lastUpdated,"%z"),label=>$i18n->get(454));
-    	$tabform->getTab("account")->text(
-		-name=>"username",
-		-label=>$i18n->get(50),
-		-value=>$username
-		);
+    $tabform->hidden({name=>"op",value=>"editUserSave"});
+    $tabform->hidden({name=>"uid",value=>$uid});
+    $tabform->getTab("account")->raw('<tr><td width="170">&nbsp;</td><td>&nbsp;</td></tr>');
+    $tabform->getTab("account")->readOnly(value=>$uid,label=>$i18n->get(378));
+    $tabform->getTab("account")->readOnly(value=>$u->karma,label=>$i18n->get(537)) if ($session->setting->get("useKarma"));
+    $tabform->getTab("account")->readOnly(value=>$session->datetime->epochToHuman($u->dateCreated,"%z"),label=>$i18n->get(453));
+    $tabform->getTab("account")->readOnly(value=>$session->datetime->epochToHuman($u->lastUpdated,"%z"),label=>$i18n->get(454));
+    $tabform->getTab("account")->text(
+        -name=>"username",
+        -label=>$i18n->get(50),
+        -value=>$username,
+        -extras=>'autocomplete="off"',
+    );
 	my %status;
 	tie %status, 'Tie::IxHash';
 	%status = (
@@ -659,7 +692,8 @@ sub www_editUser {
 			-name => "status",
 			-value => $u->status
 			);
-	} else {
+	}
+    else {
 		$tabform->getTab("account")->selectBox(
 			-name => "status",
 			-options => \%status,
@@ -676,7 +710,7 @@ sub www_editUser {
 		-options=>$options,
 		-label=>$i18n->get(164),
 		-value=>$u->authMethod,
-		);
+    );
 	foreach (@{$session->config->get("authMethods")}) {
 		my $authInstance = WebGUI::Operation::Auth::getInstance($session,$_,$u->userId);
         my $editUserForm = $authInstance->editUserForm;
@@ -690,9 +724,10 @@ sub www_editUser {
 		foreach my $field (@{$category->getFields}) {
 			next if $field->getId =~ /contentPositions/;
 			my $label = $field->getLabel . ($field->isRequired ? "*" : '');
-			if ($field->getId eq "alias" && $u->isVisitor) {
-				$tabform->getTab("profile")->raw($field->formField({label=>$label},1,undef,1));
-			} else {
+			if ($u->isVisitor) {
+				$tabform->getTab("profile")->raw($field->formField({label=>$label},1,undef,undef,undef,undef,'useFormDefault'));
+			}
+            else {
 				$tabform->getTab("profile")->raw($field->formField({label=>$label},1,$u));
 			}
 		}
@@ -718,9 +753,9 @@ sub www_editUser {
 	my @include; 
 	foreach my $group (@exclude) {
 		unless (
-			$group eq "1" || $group eq "2" || $group eq "7" # can't remove user from magic groups 
-			|| ($session->user->userId eq $u->userId  && $group eq 3) # cannot remove self from admin
-			|| ($u->isAdmin && $group eq "3") # admin user cannot be remove from admin
+			$group eq "1" || $group eq "2" || $group eq "7"     # can't remove user from magic groups 
+			|| ($session->user->userId eq $uid  && $group eq 3) # cannot remove self from admin
+			|| ($uid eq '3' && $group eq "3")                   # user Admin cannot be removed from admin group
 			) {
 			push(@include,$group);
 		}
@@ -770,22 +805,22 @@ sub www_editUserSave {
 
 	return $session->privilege->adminOnly() unless ($isAdmin || $isSecondary) && $session->form->validToken;
 
-	# Check to see if 
+    # Check to see if
 	# 1) the userId associated with the posted username matches the posted userId (we're editing an account)
 	# or that the userId is new and the username selected is unique (creating new account)
 	# or that the username passed in isn't assigned a userId (changing a username)
 	#
 	# Also verify that the posted username is not blank (we need a username)
 	#
-	
+
 	my $postedUsername = $session->form->process("username");
 	$postedUsername = WebGUI::HTML::filter($postedUsername, "all");
 
-	if (($existingUserId eq $postedUserId || ($postedUserId eq "new" && !$existingUserId) || $existingUserId eq '')
+    if (($existingUserId eq $postedUserId || ($postedUserId eq "new" && !$existingUserId) || $existingUserId eq '')
              && $postedUsername ne '') 
              {
-		# Create a user object with the id passed in.  If the Id is 'new', the new method will return a new user,
-		# otherwise return the existing users properties
+        # Create a user object with the id passed in.  If the Id is 'new', the new method will return a new user,
+        # otherwise return the existing users properties
 	   	my $u = WebGUI::User->new($session,$postedUserId);
 	   	$actualUserId = $u->userId;
 	   	
@@ -794,20 +829,67 @@ sub www_editUserSave {
 	   	$u->authMethod($session->form->process("authMethod"));
 	   	$u->status($session->form->process("status"));
 
-	   	# Loop through all of this users authentication methods
-	   	foreach (@{$session->config->get("authMethods")}) {
-
-	   		# Instantiate each auth object and call it's save method.  These methods are responsible for
-	   		# updating authentication information with values supplied by the www_editUser form.
-	      		my $authInstance = WebGUI::Operation::Auth::getInstance($session, $_, $actualUserId);
-	      		$authInstance->editUserFormSave();
-       		}
+        # Loop through all of this users authentication methods
+        foreach (@{$session->config->get("authMethods")}) {
+            # Instantiate each auth object and call it's save method.  These methods are responsible for
+            # updating authentication information with values supplied by the www_editUser form.
+                my $authInstance = WebGUI::Operation::Auth::getInstance($session, $_, $actualUserId);
+                $authInstance->editUserFormSave();
+        }
        		
-       		# Loop through all profile fields, and update them with new values.
-		foreach my $field (@{WebGUI::ProfileField->getFields($session)}) {
+        # Loop through all profile fields, and update them with new values.
+        my $address          = {};
+        my $address_mappings = WebGUI::Shop::AddressBook->getProfileAddressMappings;
+        foreach my $field (@{WebGUI::ProfileField->getFields($session)}) {
 			next if $field->getId =~ /contentPositions/;
-			$u->profileField($field->getId,$field->formProcess($u));
+            my $field_value = $field->formProcess($u);
+			$u->profileField($field->getId,$field_value);
+
+            #set the shop address fields
+            my $address_key          = $address_mappings->{$field->getId};
+            $address->{$address_key} = $field_value if ($address_key);
 		}
+
+        #Update or create and update the shop address
+        if ( keys %$address ) {
+            $address->{'isProfile'        } = 1;
+
+            #Get the address book for the user (one is created if it does not exist)
+            my $addressBook     = WebGUI::Shop::AddressBook->newByUserId($session,$actualUserId);
+            my $profileAddress = eval { $addressBook->getProfileAddress() };
+
+            my $e;
+            if($e = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound')) {
+                #Get home address only mappings to avoid creating addresses with just firstName, lastName, email
+                my %home_address_map = %{$address_mappings};
+                foreach my $exclude ( qw{ firstName lastName email } ) {
+                    delete $home_address_map{$exclude};
+                }
+                #Add the profile address for the user if there are homeAddress fields
+                if( grep { $address->{$_} } values %home_address_map ) {
+                    $address->{label} = "Profile Address";
+                    my $new_address = $addressBook->addAddress($address);
+                    #Set this as the default address if one doesn't already exist
+                    my $defaultAddress = eval{ $addressBook->getDefaultAddress };
+                    if(WebGUI::Error->caught('WebGUI::Error::ObjectNotFound')) {
+                        $addressBook->update( {
+                            defaultAddressId => $new_address->getId
+                        } );
+                    }
+                }
+            }
+            elsif ($e = WebGUI::Error->caught) {
+                #Bad stuff happened - log an error but don't fail since this isn't a vital function
+                $session->log->error(
+                    q{Could not update Shop Profile Address for user }
+                        .$u->username.q{ : }.$e->error
+                );
+            }
+            else {
+                #Update the profile address for the user
+                $profileAddress->update($address);
+            }
+        }
 		
 		# Update group assignements
 		my @groups = $session->form->group("groupsToAdd");

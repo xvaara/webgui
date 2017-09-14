@@ -40,8 +40,16 @@ sub AUTOLOAD {
 
 # Emulate/delegate/fake Apache2::* subs
 sub uri         { shift->{request}->path_info }
-sub param       { shift->{request}->param(@_) }
-sub params      { shift->{request}->prameters->mixed(@_) }
+sub param       {
+    my $self = shift;
+    if (@_) {
+        return $self->{request}->param(@_);
+    }
+    else {
+        return $self->params;
+    }
+}
+sub params      { shift->{request}->parameters->mixed(@_) }
 sub headers_in  { shift->{request}->headers(@_) }
 sub headers_out { shift->{headers_out} }
 sub protocol    { shift->{request}->protocol(@_) }
@@ -63,7 +71,11 @@ sub content_type {
 # TODO: I suppose this should do some sort of IO::Handle thing
 sub print {
     my $self = shift;
-    push @{ $self->{body} }, @_;
+    # Make sure we'll never output wide chars because plack will die when we do.
+    foreach ( @_ ) {
+        utf8::encode( $_ ) if utf8::is_utf8( $_ );
+        push @{ $self->{body} }, $_;
+    }
 }
 
 sub pnotes {
@@ -154,6 +166,12 @@ sub dir_config {
 
 package Plack::Request::Upload;
 
-sub link { shift->link_to(@_) }
+sub link {
+    my $self    = shift;
+    my $target  = shift;
+    require File::Copy;
+
+    File::Copy::copy( $self->path, $target ) or die "copy failed $!, $@";
+}
 
 1;

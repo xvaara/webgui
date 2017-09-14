@@ -15,6 +15,8 @@ package WebGUI::Session::Scratch;
 =cut
 
 use strict;
+use WebGUI::International;
+use Scalar::Util qw( weaken );
 
 =head1 NAME
 
@@ -160,6 +162,19 @@ sub get {
 	return $self->{_data}{$var};
 }
 
+#-------------------------------------------------------------------
+
+=head2 getLanguageOverride ()
+
+Retrieves the language of the session scratch
+
+=cut
+
+sub getLanguageOverride {
+	my $self = shift;
+	my $languageOverride = $self->session->scratch->get('language');
+	return $languageOverride;
+}
 
 #-------------------------------------------------------------------
 
@@ -177,10 +192,23 @@ sub new {
 	my $class = shift;
 	my $session = shift;
 	my $data = $session->db->buildHashRef("select name,value from userSessionScratch where sessionId=?",[$session->getId], {noOrder => 1});
-	bless {_session=>$session, _data=>$data}, $class;
+	my $self = bless {_session=>$session, _data=>$data}, $class;
+        weaken( $self->{_session} );
+        return $self;
 }
 
+#-------------------------------------------------------------------
 
+=head2 removeLanguageOverride()
+
+Removes the language scratch variable from the session
+
+=cut
+
+sub removeLanguageOverride {
+	my $self = shift;
+	$self->session->scratch->delete('language');
+}
 #-------------------------------------------------------------------
 
 =head2 session ( )
@@ -220,5 +248,30 @@ sub set {
 	$self->session->db->write("insert into userSessionScratch (sessionId, name, value) values (?,?,?) on duplicate key update value=VALUES(value)", [$self->session->getId, $name, $value]);
 }
 
+#----------------------------------------------------------------------
+
+=head2 setLanguageOverride ( language )
+
+Sets a scratch variable language in the session if the language is installed
+
+=head3 language
+
+The language that should be set into the session
+
+=cut
+
+sub setLanguageOverride {
+	my $self = shift;
+	my $language = shift;
+        my $i18n = WebGUI::International->new($self->session);
+        if($i18n->getLanguages()->{$language}) {
+                $self->session->scratch->set("language",$language);
+                return undef;
+        }
+        else {
+                $self->session->log->error("Language $language is not installed in this site");
+                return undef;
+	}
+}
 
 1;

@@ -22,6 +22,8 @@ use WebGUI::Storage;
 use WebGUI::User;
 use WebGUI::Utility;
 use WebGUI::Form::Captcha;
+use WebGUI::Macro;
+use Scope::Guard qw(guard);
 use Encode ();
 
 our @ISA = qw(WebGUI::Auth);
@@ -165,7 +167,7 @@ sub createAccount {
     unless($setting->get('webguiUseEmailAsUsername')){   
         my $username = $form->process("authWebGUI.username");
         $vars->{'create.form.username'} 
-            = WebGUI::Form::text($self->session, {
+            = WebGUI::Form::username($self->session, {
                 name   => "authWebGUI.username",
                 value  => $username,
                 extras => $self->getExtrasStyle($username)
@@ -268,12 +270,26 @@ sub createAccountSave {
     $properties->{ identifier           } = $self->hashPassword($password);
     $properties->{ passwordLastUpdated  } = time();
     $properties->{ passwordTimeout      } = $setting->get("webguiPasswordTimeout");
-    $properties->{ status } = 'Deactivated' if ($setting->get("webguiValidateEmail"));
 
     my $afterCreateMessage = $self->SUPER::createAccountSave($username,$properties,$password,$profile);
+    my $sendEmail   = $setting->get('webguiValidateEmail');
+
+    # We need to deactivate the user and log him out if there are additional
+    # things that need to be done before he should be logged in.
+    my $cleanupUser;
+    if ($sendEmail || !$setting->get('enableUsersAfterAnonymousRegistration')) {
+        $cleanupUser = guard {
+            $self->user->status('Deactivated');
+            $session->var->end($session->var->get('sessionId'));
+            $session->var->start(1, $session->getId);
+            my $u = WebGUI::User->new($session, 1);
+            $self->{user} = $u;
+            $self->logout;
+        };
+    }
 
     # Send validation e-mail if required
-    if ($setting->get("webguiValidateEmail")) {
+    if ($sendEmail) {
         my $key = $session->id->generate;
         $self->saveParams($self->userId,"WebGUI",{emailValidationKey=>$key});
         my $mail = WebGUI::Mail::Send->create($self->session, {
@@ -288,13 +304,7 @@ WebGUI::Asset::Template->new($self->session,$self->getSetting('accountActivation
         WebGUI::Macro::process($self->session,\$text);
         $mail->addText($text);
         $mail->addFooter;
-        $mail->send;
-        $self->user->status("Deactivated");
-        $session->var->end($session->var->get("sessionId"));
-        $session->var->start(1,$session->getId);
-        my $u = WebGUI::User->new($session,1);
-        $self->{user} = $u;
-        $self->logout;
+        $mail->queue;
         return $self->displayLogin($i18n->get('check email for validation','AuthWebGUI'));
     }
     return $afterCreateMessage;
@@ -325,6 +335,18 @@ sub deactivateAccountConfirm {
     my $i18n    = WebGUI::International->new($self->session);
     return $self->displayLogin(sprintf( $i18n->get("deactivateAccount success"), $username ));
 }
+
+#-------------------------------------------------------------------
+
+=head2 checkField ( )
+
+Performs AJAX checks on form field input. For example, can check whether a user
+name is free for registration.
+
+Returns the JSON {"error":"errorString"} where errorString is an error message
+or an empty string if the check was successful.
+
+=cut
 
 #-------------------------------------------------------------------
 sub displayAccount {
@@ -387,7 +409,8 @@ sub editUserForm {
    $f->password(
 	name=>"authWebGUI.identifier",
 	label=>$i18n->get(51),
-	value=>"password"
+	value=>"password",
+    extras=>'autocomplete="off"',
 	);
    $f->interval(
 	-name=>"authWebGUI.passwordTimeout",
@@ -569,6 +592,13 @@ sub editUserSettingsForm {
 		-label     => $i18n->get("create account template"),
 		-hoverHelp => $i18n->get("create account template help"),
     );
+    $f->template(
+        -name      => "webguiDeactivateAccountTemplate",
+        -value     => $self->session->setting->get("webguiDeactivateAccountTemplate"),
+        -namespace => "Auth/WebGUI/Deactivate",
+        -label     => $i18n->get("deactivate account template"),
+        -hoverHelp => $i18n->get("deactivate account template help"),
+    );
 	$f->template(
 		-name      => "webguiExpiredPasswordTemplate",
 		-value     => $self->session->setting->get("webguiExpiredPasswordTemplate"),
@@ -589,6 +619,13 @@ sub editUserSettingsForm {
 		-namespace => "Auth/WebGUI/Recovery2",
 		-label     => $i18n->get("password recovery template"),
 		-hoverHelp => $i18n->get("password recovery template help")
+    );
+    $f->template(
+        -name      => "webguiPasswordRecoveryEmailTemplate",
+        -value     => $self->session->setting->get('webguiPasswordRecoveryEmailTemplate'),
+        -label     => $i18n->get('Password Recovery Email Template'),
+		-hoverHelp => $i18n->get("password recovery email template help"),
+		-namespace => "Auth/WebGUI/RecoveryEmail",
     );
     $f->template(
         -name      => "webguiWelcomeMessageTemplate",
@@ -649,15 +686,18 @@ sub editUserSettingsFormSave {
     }
 
 	$s->set("webguiPasswordRecoveryRequireUsername", $f->process("webguiPasswordRecoveryRequireUsername","yesNo"));
-	$s->set("webguiValidateEmail", $f->process("webguiValidateEmail","yesNo"));
-	$s->set("webguiUseCaptcha", $f->process("webguiUseCaptcha","yesNo"));
-	$s->set("webguiAccountTemplate", $f->process("webguiAccountTemplate","template"));
-	$s->set("webguiCreateAccountTemplate", $f->process("webguiCreateAccountTemplate","template"));
-	$s->set("webguiExpiredPasswordTemplate", $f->process("webguiExpiredPasswordTemplate","template"));
-	$s->set("webguiLoginTemplate", $f->process("webguiLoginTemplate","template"));
-	$s->set("webguiPasswordRecoveryTemplate", $f->process("webguiPasswordRecoveryTemplate","template"));
-    $s->set("webguiWelcomeMessageTemplate", $f->process("webguiWelcomeMessageTemplate","template"));
-    $s->set("webguiAccountActivationTemplate", $f->process("webguiAccountActivationTemplate","template")); 
+	$s->set("webguiValidateEmail",                   $f->process("webguiValidateEmail","yesNo"));
+	$s->set("webguiUseCaptcha",                      $f->process("webguiUseCaptcha","yesNo"));
+	$s->set("webguiAccountTemplate",                 $f->process("webguiAccountTemplate","template"));
+	$s->set("webguiCreateAccountTemplate",           $f->process("webguiCreateAccountTemplate","template"));
+	$s->set("webguiDeactivateAccountTemplate",       $f->process("webguiDeactivateAccountTemplate","template"));
+	$s->set("webguiExpiredPasswordTemplate",         $f->process("webguiExpiredPasswordTemplate","template"));
+	$s->set("webguiLoginTemplate",                   $f->process("webguiLoginTemplate","template"));
+	$s->set("webguiPasswordRecoveryTemplate",        $f->process("webguiPasswordRecoveryTemplate","template"));
+    $s->set("webguiWelcomeMessageTemplate",          $f->process("webguiWelcomeMessageTemplate","template"));
+    $s->set("webguiAccountActivationTemplate",       $f->process("webguiAccountActivationTemplate","template")); 
+	$s->set("webguiPasswordRecoveryTemplate",        $f->process("webguiPasswordRecoveryTemplate","template"));
+	$s->set("webguiPasswordRecoveryEmailTemplate",   $f->process("webguiPasswordRecoveryEmailTemplate","template"));
 
     if (@errors) {
         return \@errors;
@@ -680,6 +720,17 @@ sub getCreateAccountTemplateId {
 }
 
 #-------------------------------------------------------------------
+sub getDeactivateAccountTemplateId {
+	my $self = shift;
+	return $self->session->setting->get("webguiDeactivateAccountTemplate") || $self->SUPER::getDeactivateAccountTemplateId;
+}
+
+#-------------------------------------------------------------------
+sub getDefaultLoginTemplateId {
+	return "PBtmpl0000000000000013";
+}
+
+#-------------------------------------------------------------------
 sub getExpiredPasswordTemplateId {
 	my $self = shift;
 	return $self->session->setting->get("webguiExpiredPasswordTemplate") || "PBtmpl0000000000000012";
@@ -688,7 +739,7 @@ sub getExpiredPasswordTemplateId {
 #-------------------------------------------------------------------
 sub getLoginTemplateId {
 	my $self = shift;
-	return $self->session->setting->get("webguiLoginTemplate") || "PBtmpl0000000000000013";
+	return $self->session->setting->get("webguiLoginTemplate") || $self->getDefaultLoginTemplateId;
 }
 
 #-------------------------------------------------------------------
@@ -1071,7 +1122,6 @@ sub emailRecoverPasswordFinish {
 
     # generate information necessry to proceed
     my $recoveryGuid = $session->id->generate();
-    my $url = $session->url->getSiteURL;
     my $userId = $user->userId; #get the user guid
     $email = $user->profileField('email');
 
@@ -1085,8 +1135,19 @@ sub emailRecoverPasswordFinish {
     $self->saveParams($userId, 'WebGUI', $authsettings);
 
     my $mail = WebGUI::Mail::Send->create($session, { to=>$email, subject=>$i18n->get('WebGUI password recovery')});
-    $mail->addText($i18n->get('recover password email text1', 'AuthWebGUI') . $url. ". \n\n".$i18n->get('recover password email text2', 'AuthWebGUI')." \n\n ".$url."?op=auth;method=emailResetPassword;token=$recoveryGuid"."\n\n ". $i18n->get('recover password email text3', 'AuthWebGUI'));
-    $mail->send;
+    my $vars = { };
+    $vars->{recoverPasswordUrl} = $session->url->append($session->url->getSiteURL.$session->url->gateway,'op=auth;method=emailResetPassword;token='.$recoveryGuid);
+    my $templateId = $session->setting->get('webguiPasswordRecoveryEmailTemplate');
+    my $template  = WebGUI::Asset->newByDynamicClass($session, $templateId);
+    if (!$template) {
+        $session->errorHandler->error("Can't instantiate template $templateId for template email recovery");
+        my $i18n = WebGUI::International->new($self->session, 'Asset');
+        return $i18n->get('Error: Cannot instantiate template').' '.$templateId;
+    }
+    my $emailText = $template->process($vars);
+    WebGUI::Macro::process($session, \$emailText);
+    $mail->addText($emailText);
+    $mail->queue;
     return "<h1>". $i18n->get('recover password banner', 'AuthWebGUI')." </h1> <br> <br> <h3>". $i18n->get('email recover password finish message', 'AuthWebGUI') . "</h3>";
 }
 
@@ -1299,7 +1360,7 @@ sub updateAccount {
    }
    
    if($error){
-      $display = $error;
+      $display = '<ul>'.$error.'</ul>';
    }
    
    my $properties;

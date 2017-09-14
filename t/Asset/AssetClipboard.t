@@ -20,16 +20,19 @@ use WebGUI::Session;
 use WebGUI::Utility;
 use WebGUI::Asset;
 use WebGUI::VersionTag;
+use Test::MockObject;
+use Test::MockObject::Extends;
+use WebGUI::Fork;
 
 use Test::More; # increment this value for each test you create
-plan tests => 12;
+plan tests => 30;
 
 my $session = WebGUI::Test->session;
 $session->user({userId => 3});
 my $root = WebGUI::Asset->getRoot($session);
 my $versionTag = WebGUI::VersionTag->getWorking($session);
 $versionTag->set({name=>"Asset Clipboard test"});
-WebGUI::Test->tagsToRollback($versionTag);
+WebGUI::Test->addToCleanup($versionTag);
 
 my $snippet = $root->addChild({
     url => 'testSnippet',
@@ -37,7 +40,7 @@ my $snippet = $root->addChild({
     menuTitle => 'snippetMenuTitle',
     className => 'WebGUI::Asset::Snippet',
     snippet   => 'A snippet of text',
-});
+}, undef, time()-3);
 
 my $snippetAssetId      = $snippet->getId;
 my $snippetRevisionDate = $snippet->get("revisionDate");
@@ -70,8 +73,6 @@ my $folder1a2 = $folder1a->addChild({
 
 $versionTag->commit;
 
-sleep 2;
-
 my $duplicatedSnippet = $snippet->duplicate;
 
 is($duplicatedSnippet->get('title'), 'snippet',        'duplicated snippet has correct title');
@@ -88,7 +89,7 @@ is($duplicatedSnippet->getParent->getId, $root->getId, 'duplicated snippet is al
 
 my $newVersionTag = WebGUI::VersionTag->getWorking($session);
 $newVersionTag->commit;
-WebGUI::Test->tagsToRollback($newVersionTag);
+WebGUI::Test->addToCleanup($newVersionTag);
 
 ####################################################
 #
@@ -102,3 +103,135 @@ is($topFolder->cloneFromDb->get('state'), 'clipboard', '... state set to trash i
 is($folder1a->cloneFromDb->get('state'),  'clipboard-limbo', '... state set to clipboard-limbo on child #1');
 is($folder1b->cloneFromDb->get('state'),  'clipboard-limbo', '... state set to clipboard-limbo on child #2');
 is($folder1a2->cloneFromDb->get('state'), 'clipboard-limbo', '... state set to clipboard-limbo on grandchild #1-1');
+
+sub is_tree_of_folders {
+    my ($asset, $depth, $pfx) = @_;
+    my $recursive; $recursive = sub {
+        my ($asset, $depth) = @_;
+        my $pfx = "    $pfx $depth";
+        return 0 unless isa_ok($asset, 'WebGUI::Asset::Wobject::Folder',
+            "$pfx: this object");
+
+        my $children = $asset->getLineage(
+            ['children'], {
+                statesToInclude => ['clipboard', 'clipboard-limbo' ],
+                returnObjects   => 1,
+            }
+        );
+
+        return $depth < 2
+            ? is(@$children, 0, "$pfx: leaf childless")
+            : is(@$children, 1, "$pfx: has child")
+              && $recursive->($children->[0], $depth - 1);
+    };
+
+    my $pass = $recursive->($asset, $depth);
+    undef $recursive;
+    my $message = "$pfx is tree of folders";
+    return $pass ? pass $message : fail $message;
+}
+
+# test www_copy
+my $tag = WebGUI::VersionTag->create($session);
+$tag->setWorking;
+WebGUI::Test->addToCleanup($tag);
+
+my $tempspace  = WebGUI::Asset->getTempspace($session);
+my $folder     = {className => 'WebGUI::Asset::Wobject::Folder'};
+my $root       = $tempspace->addChild($folder);
+my $child      = $root->addChild($folder);
+my $grandchild = $child->addChild($folder);
+
+sub copied {
+    for my $a (@{$tempspace->getAssetsInClipboard}) {
+        if ($a->getParent->getId eq $tempspace->getId) {
+            return $a;
+        }
+    }
+    return undef;
+}
+
+my $process = Test::MockObject->new->mock(update => sub {});
+my @methods = (
+    # single duplicate doesn't fork, so we can just test the www method to
+    # make sure it gets it right
+    sub { shift->www_copy },
+    sub { shift->duplicateBranch(1, 'clipboard') },
+    sub { shift->duplicateBranch(0, 'clipboard') },
+);
+my @prefixes = qw(single children descendants);
+for my $i (0..2) {
+    my $meth = $methods[$i];
+    $root->$meth();
+    my $clip = copied();
+    is_tree_of_folders($clip, $i+1, @prefixes[$i]);
+    $clip->purge;
+}
+
+####################################################
+#
+# paste
+#
+####################################################
+
+my $versionTag2 = WebGUI::VersionTag->getWorking($session);
+WebGUI::Test->addToCleanup($versionTag2);
+
+my $page = $tempspace->addChild({
+    className => 'WebGUI::Asset::Wobject::Layout',
+    title     => 'Parent asset',
+});
+
+my $shortcut = $tempspace->addChild({
+    className         => 'WebGUI::Asset::Shortcut',
+    shortcutToAssetId => $page->getId,
+});
+
+$versionTag2->commit;
+
+foreach my $asset ($page, $shortcut, ) {
+    $asset = $asset->cloneFromDb;
+}
+
+$shortcut->cut;
+
+is $page->paste($shortcut->getId), 0, 'cannot paste a shortcut immediately below the asset it shortcuts';
+
+$shortcut->publish;
+
+$page->cut;
+
+is $shortcut->paste($page->getId), 0, 'cannot paste below shortcuts';
+
+####################################################
+#
+# pasteInFork
+#
+####################################################
+
+$session->user({ userId => "3" });
+my $process = Test::MockObject::Extends->new( 'WebGUI::Fork' );
+$process->mock( "update" => sub { } ); # do nothing on update. we don't care
+$process->mock( "session" => sub { return $session } );
+
+
+# Try with a Collaboration and some Threads
+my $tag = WebGUI::VersionTag->getWorking( $session );
+WebGUI::Test->addToCleanup($tag);
+my $collab = $tempspace->addChild({
+    className => 'WebGUI::Asset::Wobject::Collaboration',
+    groupIdEdit => "3",
+    status => "pending",
+    tagId => $tag->getId,
+}, undef, undef, { skipAutoCommitWorkflows => 1, skipNotification => 1 });
+my $thread = $collab->addChild({
+    className => 'WebGUI::Asset::Post::Thread',
+    groupIdEdit => "3",
+    status => "pending",
+    tagId => $tag->getId,
+}, undef, undef, { skipAutoCommitWorkflows => 1, skipNotification => 1 });
+$tag->commit;
+$thread->cut;
+WebGUI::Asset::pasteInFork( $process, { assetId => $collab->getId, list => [ $thread->getId ] } );
+$thread = $thread->cloneFromDb;
+is( $thread->get('state'), 'published', 'thread is pasted' );

@@ -19,7 +19,8 @@ use strict;
 use lib "$FindBin::Bin/../lib";
 use WebGUI::Test;
 use WebGUI::Session;
-use Test::More tests => 16; # increment this value for each test you create
+use Test::More tests => 20; # increment this value for each test you create
+use Test::Deep;
 use WebGUI::Asset::Wobject::Collaboration;
 use WebGUI::Asset::Post;
 use WebGUI::Asset::Post::Thread;
@@ -54,7 +55,7 @@ my $otherUser           = WebGUI::User->new($session, 'new');
 my $groupIdEditUser     = WebGUI::User->new($session, 'new');
 my $groupToEditPostId   = $collab->get('groupToEditPost');
 my $groupIdEdit         = $collab->get('groupIdEdit');
-WebGUI::Test->usersToDelete($postingUser, $otherUser, $groupIdEditUser);
+WebGUI::Test->addToCleanup($postingUser, $otherUser, $groupIdEditUser);
 $postingUser->username('userForPosting');
 $otherUser->username('otherUser');
 
@@ -83,7 +84,7 @@ my $props = {
 my $post = $collab->addChild($props, @addArgs);
 
 $versionTag->commit();
-WebGUI::Test->tagsToRollback($versionTag);
+WebGUI::Test->addToCleanup($versionTag);
 
 # Test for a sane object type
 isa_ok($post, 'WebGUI::Asset::Post::Thread');
@@ -113,6 +114,7 @@ ok($post->canEdit(), "User in groupIdEditUserGroup group can edit post after the
 #
 ######################################################################
 
+can_ok($post, 'getSynopsisAndContent');
 my ($synopsis, $content) = $post->getSynopsisAndContent('', q|Brandheiße Neuigkeiten rund um's Klettern für euch aus der Region |);
 is($synopsis, q|Brandheiße Neuigkeiten rund um's Klettern für euch aus der Region |, 'getSynopsisAndContent: UTF8 characters okay');
 
@@ -147,7 +149,7 @@ my $post2 = $collab->addChild({
     ownerUserId => 1,
 }, @addArgs);
 $versionTag2->commit();
-WebGUI::Test->tagsToRollback($versionTag);
+WebGUI::Test->addToCleanup($versionTag);
 my $variables;
 $session->user({userId => 1});
 $variables = $post1->getTemplateVars();
@@ -164,5 +166,58 @@ ok( !$variables->{'hideProfileUrl'}, 'show profile url');
 $variables = $post2->getTemplateVars();
 is(  $variables->{'ownerUserId'}, 1, 'first post owned by admin');
 ok(  $variables->{'hideProfileUrl'}, 'hide profile url, since poster is visitor');
+
+##Check for attachments
+
+my $storage = $post1->getStorageLocation();
+$storage->addFileFromFilesystem(WebGUI::Test->getTestCollateralPath('gooey.jpg'));
+$storage->addFileFromFilesystem(WebGUI::Test->getTestCollateralPath('lamp.jpg'));
+$storage->addFileFromFilesystem(WebGUI::Test->getTestCollateralPath('littleTextFile'));
+my $attachment_loop = $post1->getTemplateVars()->{attachment_loop};
+
+my @extensions = map { [ $_->{filename}, $_->{extension} ] } @{ $attachment_loop };
+
+cmp_bag(
+    $attachment_loop,
+    [
+        {
+            filename  => 'gooey.jpg',
+            url       => $storage->getUrl('gooey.jpg'),
+            icon      => $session->url->extras('fileIcons/jpg.gif'),
+            thumbnail => $storage->getThumbnailUrl('gooey.jpg'),
+            extension => 'jpg',
+            isImage   => bool(1),
+        },
+        {
+            filename  => 'lamp.jpg',
+            url       => $storage->getUrl('lamp.jpg'),
+            icon      => $session->url->extras('fileIcons/jpg.gif'),
+            thumbnail => $storage->getThumbnailUrl('lamp.jpg'),
+            extension => 'jpg',
+            isImage   => bool(1),
+        },
+        {
+            filename  => 'littleTextFile',
+            url       => $storage->getUrl('littleTextFile'),
+            icon      => $session->url->extras('fileIcons/unknown.gif'),
+            thumbnail => '',
+            extension => undef,
+            isImage   => bool(0),
+        },
+    ],
+    'checking attachment loop with multiple attachments for handling of image and non-image types'
+);
+
+######################################################################
+#
+# duplicate
+#
+######################################################################
+
+{
+    my $post1_copy = $post1->duplicate;
+    ok $post1_copy->get('storageId'), 'copied post has a storage location';
+    isnt $post1->get('storageId'), $post1_copy->get('storageId'), '... and it is different from the source post';
+}
 
 # vim: syntax=perl filetype=perl

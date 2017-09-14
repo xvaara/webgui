@@ -211,11 +211,20 @@ sub generateCloud {
         [ $options->{startAsset}->get("lineage").'%', @extraPlaceholders, $maxKeywords ]);
     my $cloud = HTML::TagCloud->new(levels=>$options->{cloudLevels} || 24);
     while (my ($count, $keyword) = $sth->array) {
-        my $url
-            = $urlCallback ? $display->$urlCallback($keyword)
-            : $options->{displayFunc} ? $display->getUrl("func=".$options->{displayFunc}.";keyword=".$keyword)
-            : $display->getUrl("keyword=".$keyword)
-            ;
+        my $url;
+        if ($urlCallback) {
+            $url = $display->$urlCallback($keyword);
+        }
+        else {
+            my @q = ( [ 'keyword', $keyword, ] );
+            my $e = $self->session->url;
+            if (my $func = $options->{displayFunc}) {
+                unshift @q, [ 'func', $func ];
+            }
+            $url = $display->getUrl(
+                join(';', map { join '=', $_->[0], $e->escape($_->[1]) } @q)
+            );
+        }
         $cloud->add($keyword, $url, $count);
     }
     return $cloud->html_and_css($maxKeywords);
@@ -307,6 +316,11 @@ If usePaginator is not passed, then this variable will limit the number of asset
 An array reference of asset states.  The ids of assets in those states will be returned.  If this option
 is missing, only assets in the C<published> state will be returned.
 
+=head4 sortOrder
+
+Determines the order that assets are returned.  By default, it is in Chronological order, by creationDate.  If
+you set sortOrder to Alphabetically, it will sort by title, and then lineage.
+
 =cut
 
 sub getMatchingAssets {
@@ -367,9 +381,18 @@ sub getMatchingAssets {
         push @clauses, 'keyword in ('.join(',', @placeholders).')';
     }
 
+    my $sortOrder = $options->{sortOrder} || 'Chronologically';
+
+    my $orderBy = $sortOrder eq 'Alphabetically' ? ' order by upper(title), lineage' : ' order by creationDate desc, lineage';
+
     # write the query
-    my $query = 'select distinct assetKeyword.assetId from assetKeyword left join asset using (assetId)
-        where '.join(' and ', @clauses).' order by creationDate desc, lineage';
+    my $query = q{
+        select distinct assetKeyword.assetId 
+        from   assetKeyword 
+        left join asset using (assetId) 
+        left join assetData using (assetId)
+        where } . 
+        join(' and ', @clauses) . $orderBy;
 
     # perform the search
     if ($options->{usePaginator}) {
@@ -381,6 +404,80 @@ sub getMatchingAssets {
         $query .= ' limit '. $options->{rowsPerPage};
     }
     return $self->session->db->buildArrayRef($query, \@params);
+}
+
+#-------------------------------------------------------------------
+
+=head2 getTopKeywords ( $options )
+
+Returns a hashref of the the top N keywords as well as the total number returned sorted in alphabetical order
+
+=head3 $options
+
+A hashref of options to change the behavior of the method.
+
+=head4 asset
+
+Find all keywords for all assets below an asset, providing a WebGUI::Asset object.
+
+=head4 assetId
+
+Find all keywords for all assets below an asset, providing an assetId.
+
+=head4 search
+
+Find all keywords using the SQL clause LIKE.  This can be used in tandem with asset or assetId.
+
+=head4 limit
+
+Limit the number of top keywords that are returned.
+
+=cut
+
+sub getTopKeywords {
+    my $self    = shift;
+    my $options = shift;
+    my $sql     = q|
+        SELECT
+            keyword,occurrance
+        FROM (
+            SELECT
+                keyword, count(keyword) as occurrance
+            FROM
+                assetKeyword
+    |;
+    my @where;
+    my @placeholders;
+    my $parentAsset;
+    if ($options->{asset}) {
+        $parentAsset = $options->{asset};
+    }
+    if ($options->{assetId}) {
+        $parentAsset = WebGUI::Asset->new($self->session, $options->{assetId});
+    }
+    if ($parentAsset) {
+        $sql .= ' INNER JOIN asset USING (assetId)';
+        push @where, 'lineage LIKE ?';
+        push @placeholders, $parentAsset->get('lineage') . '%';
+    }
+    if ($options->{search}) {
+        push @where, 'keyword LIKE ?';
+        push @placeholders, '%' . $options->{search} . '%';
+    }
+    if (@where) {
+        $sql .= ' WHERE ' . join(' AND ', @where);
+    }
+    $sql .= ' GROUP BY keyword';
+    $sql .= ' ORDER BY occurrance desc';
+    if ($options->{limit}) {
+        $sql .= ' LIMIT ' . $options->{limit};
+    }
+    $sql .= q|
+        ) as keywords
+        order by keyword
+    |;
+    my $keywords = $self->session->db->buildHashRef($sql, \@placeholders);
+    return $keywords;
 }
 
 

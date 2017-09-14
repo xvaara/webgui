@@ -24,7 +24,7 @@ plan tests => 4; # increment this value for each test you create
 my $session = WebGUI::Test->session;
 
 my $user = WebGUI::User->new($session, "new");
-WebGUI::Test->usersToDelete($user);
+WebGUI::Test->addToCleanup($user);
 
 $session->user({user => $user});
 
@@ -51,10 +51,9 @@ my $slaveHash2 = {
 };
 
 $session->config->set('dbslave2', $slaveHash2);
+WebGUI::Test->addToCleanup(sub {$session->config->delete('dbslave2');});
 
 my $slave2 = $session->dbSlave;
 isa_ok($slave2, 'WebGUI::SQL');
 
-END {
-    $session->config->delete('dbslave2');
-}
+#vim:ft=perl

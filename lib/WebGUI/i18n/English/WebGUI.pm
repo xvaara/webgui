@@ -126,6 +126,11 @@ our $I18N = {
 		context=>"Settings hover help"
 	},
 
+	'Addons title' => {
+		message => q|Addons|,
+		lastUpdated => 1285067064,
+		context => "Link title for addons link in adminconsole"
+	},
 	'purge workflow' => {
 		message => q|Purge Workflow|,
 		lastUpdated => 1162242500,
@@ -172,6 +177,11 @@ our $I18N = {
 	'304' => {
 		message => q|Language|,
 		lastUpdated => 1031514049
+	},
+
+	'language help' => {
+		message => q|Select the default language for users on the site.|,
+		lastUpdated => 1258340387,
 	},
 
 	'559' => {
@@ -279,6 +289,11 @@ our $I18N = {
 		message => q|Rate Message|,
 		lastUpdated => 1065356764
 	},
+
+    'or' => {
+        message => q|or|,
+		lastUpdated => 1053804577,
+    },
 
 	'978' => {
 		message => q|User added successfully.|,
@@ -508,6 +523,11 @@ our $I18N = {
 	'487' => {
 		message => q|Select Box|,
 		lastUpdated => 1133087205
+	},
+
+	'Template Parser' => {
+		message => q|Template Parser|,
+		lastUpdated => 1301593691
 	},
 
 	'391' => {
@@ -1425,6 +1445,11 @@ You must be using mod_perl and configure <b>PerlSetEnv SYBASE /opt/sybase/11.0.2
                 lastUpdated => 1122093200,
         },
 
+        'override user email preference description' => {
+                message => q|Send mail regardless of the users' preferences about receiving inbox notifications|,
+                lastUpdated => 1302878213,
+        },
+
         '230 description' => {
                 message => q|The message that will be sent to all members of the group.  The message will be
 sent in HTML format. No attachments can be included.|,
@@ -2221,6 +2246,11 @@ This group could then be named "Employees in HMO 1", and would allow you to rest
 	'229' => {
 		message => q|Subject|,
 		lastUpdated => 1031514049
+	},
+
+	'override user email preference' => {
+		message => 'Override user email preference?',
+		lastUpdated => 1302878112,
 	},
 
 	'866' => {
@@ -3038,6 +3068,12 @@ or are under your current version tag.</p>
 		lastUpdated =>1092930637,
                 context => q|Label of the cancel button|
         },
+
+    'Cancel' => {
+        message => q|Cancel|,
+        lastUpdated =>1092930637,
+        context => q|Label of the cancel button, with capital C|
+    },
 
 	'trash' => {
 		message => q|Trash|,
@@ -3904,6 +3940,15 @@ LongTruncOk=1</p>
     },
 
 
+    'settings groupIdAdminClipboard label' => {
+        message     => q{Clipboard},
+        lastUpdated => 0,
+    },
+    'settings groupIdAdminClipboard hoverHelp' => {
+        message     => q{Group to manage the system clipboard.},
+        lastUpdated => 0,
+    },
+
 
     'settings groupIdAdminCron label' => {
         message     => q{Cron},
@@ -4048,6 +4093,15 @@ LongTruncOk=1</p>
     },
     'settings groupIdAdminStatistics hoverHelp' => {
         message     => q{Group to view statistics},
+        lastUpdated => 0,
+    },
+
+    'settings groupIdAdminTrash label' => {
+        message     => q{Trash},
+        lastUpdated => 0,
+    },
+    'settings groupIdAdminTrash hoverHelp' => {
+        message     => q{Group to manage the system trash.},
         lastUpdated => 0,
     },
 
@@ -4210,14 +4264,14 @@ LongTruncOk=1</p>
             context     => q{Description for site setting},
         },
 
-    'site starter title' => {
-        message     => q{Site Starter},
+    'page builder title' => {
+        message     => q{Page Builder},
         lastUpdated => 0,
-        context     => q{Title for the site starter screen.},
+        context     => q{Title for the page builder screen.},
     },
 
-    'site starter body' => {
-        message     => q{Do you wish to use the WebGUI Site Starter, which will lead you through options to create a custom look and feel for your site, and set up some basic content areas?},
+    'page builder body' => {
+        message     => q{Would you like to use the Page Builder to select a default set of pages to include on your site, such as an About Us page or discussion forum.},
         lastUpdated => 0,
         context     => q{Body for the site starter screen.},
     },
@@ -4277,7 +4331,7 @@ LongTruncOk=1</p>
     },
 
     'Contact Us' => {
-        message     => q{All Contact Us},
+        message     => q{Contact Us},
         lastUpdated => 0,
         context     => q{Template label for automatically created Page layouts during Site Setup.},
     },
@@ -4289,7 +4343,7 @@ LongTruncOk=1</p>
     },
 
     'Forums' => {
-        message     => q{Initial Pages},
+        message     => q{Forums},
         lastUpdated => 0,
         context     => q{Label for the Site Setup screen},
     },
@@ -4630,6 +4684,74 @@ Users may override this setting in their profile.
     'Comments' => {
         message => 'Comments',
         lastUpdated => 0,
+    },
+
+    'timezone help' => {
+        message => 'Set up the default time zone for the site.',
+        lastUpdated => 0,
+    },
+
+    'Maximum cache timeout' => {
+        message => 'Maximum cache timeout',
+        lastUpdated => 0,
+    },
+
+    'Maximum cache timeout description' => {
+        message => 'This timeout will override the content check that is done before generating a page.  It can help with caching problems for macros and Navigations.  Setting it to 0 will disable the timeout.  A setting of several hours is recommended.',
+        lastUpdated => 0,
+    },
+
+    'Loading...' => {
+        message => 'Loading...',
+        lastUpdated => 0,
+        context => 'Message shown to the user when data is being loaded, typically via AJAX, like in the Survey.'
+    },
+
+    'Go' => {
+        message => 'Go',
+        lastUpdated => 0,
+        context => 'Label for buttons that take you someplace else'
+    },
+
+    'pick style' => {
+        message     => 'Choose a Design',
+        lastUpdated => 0,
+        context     => 'Header for the pick style template page',
+    },
+
+    'pick style description' => {
+        message     => 'Select a design to apply to your site. All designs are created from templates that you will have access to from your site, so modifications can be made later.',
+        lastUpdate  => 0,
+        context     => 'Description for pick style template page',
+    },
+
+    'Up' => {
+        message     => 'Up',
+        lastUpdate  => 0,
+        context     => 'Up, as in move up.',
+    },
+
+    'Down' => {
+        message     => 'Down',
+        lastUpdate  => 0,
+        context     => 'Down, as in move down.',
+    },
+
+    'Add' => {
+        message     => 'Add',
+        lastUpdate  => 0,
+        context     => 'Add, as in to append or add more',
+    },
+
+    'Enable Users after Anonymous Registration?' => {
+        message => 'Enable Users after Anonymous Registration?',
+        lastUpdated => 1311618346,
+    },
+
+    'enableUsersAfterAnonymousRegistration help' => {
+        message => 'If this is off, '
+            . 'users must be manually activated by a workflow or an admin.',
+        lastUpdated => 1311618419,
     },
 
 };

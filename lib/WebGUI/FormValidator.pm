@@ -17,6 +17,7 @@ package WebGUI::FormValidator;
 use strict qw(vars subs);
 use WebGUI::HTML;
 use WebGUI::Pluggable;
+use Scalar::Util qw( weaken );
 
 =head1 NAME
 
@@ -69,6 +70,7 @@ sub AUTOLOAD {
 	my $params	= shift;
 	my @args	= @_;
 
+    return if $AUTOLOAD =~ m/::DESTROY$/;
 	my $name = ucfirst((split /::/, $AUTOLOAD)[-1]);
 	$params = {name=>$params} if ref ($params) ne "HASH";
     my $control = eval { WebGUI::Pluggable::instanciate("WebGUI::Form::".$name, "new", [ $self->session, $params ]) };
@@ -122,7 +124,9 @@ A reference to the current session.
 sub new {
 	my $class = shift;
 	my $session = shift;
-	bless {_session=>$session}, $class;
+	my $self = bless {_session=>$session}, $class;
+        weaken( $self->{_session} );
+        return $self;
 }
 
 

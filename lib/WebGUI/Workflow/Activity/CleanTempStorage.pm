@@ -102,28 +102,35 @@ See WebGUI::Workflow::Activity::execute() for details.
 =cut
 
 sub execute {
-	my $self = shift;
+    my $self  = shift;
     my $start = time();
+    my $stop  = $start + $self->getTTL;
 
     # kill temporary assets
     my $tempspace = WebGUI::Asset->getTempspace($self->session);
-    my $children = $tempspace->getLineage(["children"], {
-        returnObjects   => 1, 
+    my $childIter = $tempspace->getLineageIterator(["children"], {
         statesToInclude => [qw(trash clipboard published)],
         statusToInclude => [qw(pending archived approved)],
         });
-    foreach my $asset (@{$children}) {
-        if (time() - $asset->get("revisionDate") > $self->get("storageTimeout")) {
-            unless ($asset->purge) {
+    while ( 1 ) {
+        my $child;
+        eval { $child = $childIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $self->session->log->error($x->full_message);
+            next;
+        }
+        last unless $child;
+        if (time() - $child->get("revisionDate") > $self->get("storageTimeout")) {
+            unless ($child->purge) {
                 return $self->ERROR;
             }
         }
         # taking too long, give up
-        return $self->WAITING(1) if (time() - $start > 50);
+        return $self->WAITING(1) if (time() > $stop);
     }
 
     # kill temporary files
-	return $self->recurseFileSystem($start, $self->session->config->get("uploadsPath")."/temp");
+	return $self->recurseFileSystem($stop, $self->session->config->get("uploadsPath")."/temp");
 }
 
 
@@ -141,7 +148,7 @@ The starting path.
 
 sub recurseFileSystem {
 	my $self = shift;
-    my $start = shift;
+    my $stop = shift;
 	my $path = shift;
     if (opendir(DIR,$path)) {
         my @filelist = readdir(DIR);
@@ -149,10 +156,10 @@ sub recurseFileSystem {
         foreach my $file (@filelist) {
             unless ($file eq "." || $file eq "..") {
                 # taking too long, time to abort
-                return $self->WAITING(1) if (time() - $start > 50);             
+                return $self->WAITING(1) if (time() > $stop);             
 
                 # must search for children
-                $self->recurseFileSystem($start, $path."/".$file);
+                $self->recurseFileSystem($stop, $path."/".$file);
 
                 # if it's old enough, let's kill it
                 if ($self->checkFileAge($path."/".$file)) {

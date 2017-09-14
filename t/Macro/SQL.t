@@ -17,6 +17,7 @@ use WebGUI::Macro::Slash_gatewayUrl;
 use WebGUI::Session;
 use WebGUI::International;
 use WebGUI::DatabaseLink;
+use WebGUI::Macro::SQL;
 use Data::Dumper;
 
 use Test::More; # increment this value for each test you create
@@ -31,6 +32,7 @@ my $WebGUIdbLink = WebGUI::DatabaseLink->new($session, '0');
 my $originalMacroAccessValue = $WebGUIdbLink->macroAccessIsAllowed();
 
 $session->db->dbh->do('DROP TABLE IF EXISTS testTable');
+WebGUI::Test->addToCleanup(SQL => 'DROP TABLE testTable');
 $session->db->dbh->do('CREATE TABLE testTable (zero int(8), one int(8), two int(8), three int(8), four int(8), five int(8), six int(8), seven int(8), eight int(8), nine int(8), ten int(8), eleven int(8) ) TYPE=InnoDB');
 $session->db->dbh->do('INSERT INTO testTable (zero, one, two, three, four, five, six, seven, eight, nine, ten, eleven ) VALUES(0,1,2,3,4,5,6,7,8,9,10,11)');
 $session->db->dbh->do('INSERT INTO testTable (zero, one, two, three, four, five, six, seven, eight, nine, ten, eleven ) VALUES(100,101,102,103,104,105,106,107,108,109,110,111)');
@@ -117,15 +119,11 @@ my @testSets = (
 	},
 );
 
-my $numTests = scalar @testSets;
-
-++$numTests; ##For the load check;
-++$numTests; ##For the allow macro access test;
-
+my $numTests = scalar @testSets
+             + 2
+             ;
+ 
 plan tests => $numTests;
-
-my $macro = 'WebGUI::Macro::SQL';
-my $loaded = use_ok($macro);
 
 $WebGUIdbLink->set({allowMacroAccess=>0});
 
@@ -136,10 +134,6 @@ is($output, $i18n->get('database access not allowed'), 'Test allow access from m
 # set allowMacroAccess to 1 to allow other tests to run
 $WebGUIdbLink->set({allowMacroAccess=>1});
 
-SKIP: {
-
-skip "Unable to load $macro", $numTests-1 unless $loaded;
-
 foreach my $testSet (@testSets) {
     # we know some of these will fail.  Keep them quiet.
     local $SIG{__WARN__} = sub {};
@@ -148,12 +142,17 @@ foreach my $testSet (@testSets) {
 	is($output, $testSet->{output}, $testSet->{comment});
 }
 
-}
-
 # reset allowMacroAccess to original value
 $WebGUIdbLink->set({allowMacroAccess=>$originalMacroAccessValue});
 
+my $newLinkId = $WebGUIdbLink->copy;
+addToCleanup(WebGUI::DatabaseLink->new($session, $newLinkId));
+my $output = WebGUI::Macro::SQL::process(
+    $session,
+    q{show columns from testTable like 'zero'},
+    q{^0;},
+    $newLinkId,
+);
+is($output, 'zero', 'alternate linkId works');
 
-END {
-	$session->db->dbh->do('DROP TABLE testTable');
-}
+#vim:ft=perl

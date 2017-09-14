@@ -31,14 +31,12 @@ my $session         = WebGUI::Test->session;
 #----------------------------------------------------------------------------
 # Tests
 
-my $tests = 18;
-plan tests => 1 + $tests;
+plan tests => 21;
 
 #----------------------------------------------------------------------------
 # put your tests here
 
 my $class  = 'WebGUI::Asset::Wobject::StoryTopic';
-my $loaded = use_ok($class);
 
 my $versionTag = WebGUI::VersionTag->getWorking($session);
 
@@ -72,13 +70,12 @@ STORY: foreach my $name (@characters) {
 
 $storyHandler->{bogs}->update({subtitle => 'drinking his food through a straw'});
 
-my $topic;
-
-SKIP: {
-
-    skip "Unable to load module $class", $tests unless $loaded;
-
-$topic = WebGUI::Asset->getDefault($session)->addChild({ className => 'WebGUI::Asset::Wobject::StoryTopic', title => 'Popular inmates in Shawshank Prison', keywords => join(',', @inmates)});
+my $topic = WebGUI::Asset->getDefault($session)->addChild({
+    className   => 'WebGUI::Asset::Wobject::StoryTopic',
+    title       => 'Popular inmates in Shawshank Prison',
+    keywords    => join(',', @inmates),
+    description => 'News from Shawshank',
+});
 
 isa_ok($topic, 'WebGUI::Asset::Wobject::StoryTopic', 'made a Story Topic');
 $topic->update({
@@ -87,6 +84,7 @@ $topic->update({
 });
 
 $versionTag->commit;
+addToCleanup($versionTag);
 
 ################################################################
 #
@@ -94,25 +92,54 @@ $versionTag->commit;
 #
 ################################################################
 
+# When it's okay that the variables we get will have extra keys and
+# values beyond what we're checking for, we'll use this function.
+sub cmp_variable_loop {
+    my ($got, $expected, $name) = @_;
+    local $Test::Builder::Level = $Test::Builder::Level + 1;
+    my $sg = @$got;
+    my $se = @$expected;
+    unless (@$got == @$expected) {
+        fail($name);
+        diag(<<EOM);
+Arrayrefs are not the same length.
+   got : $sg
+expect : $se
+EOM
+        return 0;
+    }
+
+    my $failed;
+    for my $i (0..$#$got) {
+        my $g = $got->[$i];
+        my $e = $expected->[$i];
+        my ($ok, $stack) = Test::Deep::cmp_details($g, superhashof($e));
+        unless ($ok) {
+            unless ($failed) {
+                fail($name);
+                $failed = 1;
+            }
+            diag(Test::Deep::deep_diag($stack));
+        }
+    }
+    return $failed ? 0 : pass($name);
+}
+
 my $templateVars;
 $templateVars = $topic->viewTemplateVariables();
 
 cmp_deeply(
     $templateVars,
     superhashof({
-        rssUrl  => $topic->getRssFeedUrl,
-        atomUrl => $topic->getAtomFeedUrl,
+        rssUrl      => $topic->getRssFeedUrl,
+        atomUrl     => $topic->getAtomFeedUrl,
+        description => 'News from Shawshank',
     }),
     'viewTemplateVars: RSS and Atom feed template variables'
 );
-cmp_deeply(
+cmp_variable_loop(
     $templateVars->{story_loop},
     [
-        {
-            title        => 'bogs',
-            url          => $session->url->append($topic->getUrl, 'func=viewStory;assetId='.$storyHandler->{'bogs'}->getId),
-            creationDate => $now,
-        },
         {
             title        => 'red',
             url          => $session->url->append($topic->getUrl, 'func=viewStory;assetId='.$storyHandler->{'red'}->getId),
@@ -128,17 +155,18 @@ cmp_deeply(
 );
 
 ok(
-    ! exists $templateVars->{topStoryTitle}
- && ! exists $templateVars->{topStoryUrl}
- && ! exists $templateVars->{topStoryCreationDate}
- && ! exists $templateVars->{topStorySubtitle},
-    'topStory variables not present unless in standalone mode'
+    exists $templateVars->{topStory}
+ && exists $templateVars->{topStoryTitle}
+ && exists $templateVars->{topStoryUrl}
+ && exists $templateVars->{topStoryCreationDate}
+ && exists $templateVars->{topStorySubtitle},
+    'topStory variables present in standalone mode'
 );
 ok(! $templateVars->{standAlone}, 'viewTemplateVars: not in standalone mode');
 
 $topic->{_standAlone} = 1;
 $templateVars = $topic->viewTemplateVariables();
-cmp_deeply(
+cmp_variable_loop(
     $templateVars->{story_loop},
     [
         {
@@ -170,6 +198,13 @@ cmp_deeply(
     'viewTemplateVars has right number and contents in the story_loop in standalone mode.  Top story not present in story_loop'
 );
 
+cmp_deeply($templateVars->{topStory}, superhashof({
+    title        => 'bogs',
+    subtitle     => 'drinking his food through a straw',
+    creationDate => $now,
+}));
+
+
 is($templateVars->{topStoryTitle}, 'bogs', '... topStoryTitle');
 is(
     $templateVars->{topStorySubtitle},
@@ -185,7 +220,7 @@ is($templateVars->{topStoryCreationDate}, $now, '... topStoryCreationDate');
 ok($templateVars->{standAlone}, '... standAlone mode=1');
 
 my $storage = WebGUI::Storage->create($session);
-WebGUI::Test->storagesToDelete($storage);
+WebGUI::Test->addToCleanup($storage);
 $storyHandler->{bogs}->setPhotoData([{
     caption   => "Octopus seen at the scene of Mrs. Dufresne's murder.",
     byLine    => 'Elmo Blatch',
@@ -231,8 +266,9 @@ $topic->update({
 
 $topic->{_standAlone} = 0;
 
-$templateVars = $topic->viewTemplateVariables;
+$templateVars    = $topic->viewTemplateVariables;
 my @topicInmates = map { $_->{title} } @{ $templateVars->{story_loop} };
+unshift @topicInmates, $templateVars->{topStoryTitle};
 cmp_deeply(
     \@topicInmates,
     [@inmates, 'Yesterday is history'], #extra for pastStory
@@ -244,14 +280,9 @@ $topic->update({
     storiesShort => 3,
 });
 $templateVars = $topic->viewTemplateVariables;
-cmp_deeply(
+cmp_variable_loop(
     $templateVars->{story_loop},
     [
-        {
-            title        => 'bogs',
-            url          => $storyHandler->{'bogs'}->getUrl,
-            creationDate => $now,
-        },
         {
             title        => 'red',
             url          => $storyHandler->{'red'}->getUrl,
@@ -293,6 +324,8 @@ cmp_deeply(
             'link'      => ignore(),
             date        => ignore(),
             author      => ignore(),
+            guid        => ignore(),
+            pubDate     => ignore(),
         },
         {
             title => 'red',
@@ -300,6 +333,8 @@ cmp_deeply(
             'link'      => ignore(),
             date        => ignore(),
             author      => ignore(),
+            guid        => ignore(),
+            pubDate     => ignore(),
         },
         {
             title => 'brooks',
@@ -307,19 +342,73 @@ cmp_deeply(
             'link'      => ignore(),
             date        => ignore(),
             author      => ignore(),
+            guid        => ignore(),
+            pubDate     => ignore(),
         },
     ],
     'rssFeedItems'
 );
 
-}
+################################################################
+# Sort Order
+################################################################
 
-#----------------------------------------------------------------------------
-# Cleanup
-END {
-    $archive->purge if $archive;
-    $topic->purge   if $topic;
-    if ($versionTag) {
-        $versionTag->rollback;
-    }
-}
+$pastStory->update( { title => "aaaay was history but isn't any more" } );
+$pastStory->requestAutoCommit;
+
+$topic->update({ storiesPer   => 4, storiesShort => 4, }); # storiesPer is used when _standAlone is true, storiesShort otherwise
+$topic->{_standAlone} = 0;
+$topic->update( { storySortOrder => 'Alphabetically' } );
+
+$templateVars = $topic->viewTemplateVariables();
+
+cmp_variable_loop(
+    [
+        {
+            title        => $templateVars->{topStoryTitle},
+            url          => $templateVars->{topStoryUrl},
+            creationDate => $templateVars->{topStoryCreationDate},
+        },
+        @{ $templateVars->{story_loop} },
+    ],
+    [
+        {
+            title        => "aaaay was history but isn't any more",
+            url          => ignore(),
+            creationDate => $yesterday,
+        },
+        {
+            title        => 'andy',
+            url          => ignore(),
+            creationDate => $now,
+        },
+        {
+            title        => 'bogs',
+            url          => ignore(),
+            creationDate => $now,
+        },
+        {
+            title        => 'brooks',
+            url          => ignore(),
+            creationDate => $now,
+        },
+    ],
+    'viewTemplateVars has right number and contents in the story_loop in sort order Alphabetically mode'
+);
+
+################################################################
+# Regression -- Empty StoryTopics shouldn't blow up
+################################################################
+
+my $emptyarchive    = WebGUI::Asset->getDefault($session)->addChild({
+    className => 'WebGUI::Asset::Wobject::StoryTopic', 
+    title => 'Why Do Good Things Happen To Bad People', 
+    url => '/home/badstories', 
+    keywords => 'aksjhgkja asgjhshs assajshhsg5',
+});
+addToCleanup($emptyarchive); # blows up under the debugger...?
+
+$versionTag->commit;
+$emptyarchive->{_standAlone} = 1;  
+ok(eval { $emptyarchive->viewTemplateVariables() }, "viewTemplateVariables with _standAlone = 1 doesn't throw an error");
+

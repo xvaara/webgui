@@ -237,6 +237,20 @@ sub getValueAsHtml {
 
 #-------------------------------------------------------------------
 
+=head2 headTags ( )
+
+Set the head tags for this form plugin
+
+=cut
+
+sub headTags {
+    my $self = shift;
+    $self->session->style->setScript($self->session->url->extras('FileUploadControl.js'),{type=>"text/javascript"});
+    $self->session->style->setScript($self->session->url->extras('fileIcons.js'),{type=>"text/javascript"});
+}
+
+#-------------------------------------------------------------------
+
 =head2 isDynamicCompatible ( )
 
 A class method that returns a boolean indicating whether this control is compatible with the DynamicField control.
@@ -272,14 +286,13 @@ Renders a file upload control.
 
 sub toHtml {
 	my $self = shift;
+    $self->headTags;
 	my $i18n = WebGUI::International->new($self->session);
 	my $uploadControl = '';
 	my $storage = $self->getStorageLocation;
 	my @files = @{ $storage->getFiles } if (defined $storage);
 	my $maxFiles = $self->get('maxAttachments') - scalar(@files);
 	if ($maxFiles > 0) {
-        $self->session->style->setScript($self->session->url->extras('FileUploadControl.js'),{type=>"text/javascript"});
-        $self->session->style->setScript($self->session->url->extras('fileIcons.js'),{type=>"text/javascript"});
         $uploadControl = '<script type="text/javascript">'
             . sprintf(q!var uploader = new FileUploadControl("%s", fileIcons, "%s","%d", "%s"); uploader.addRow();!
                 , $self->get("name")."_file", $i18n->get("removeLabel"), $maxFiles, $self->get("size"))
@@ -289,25 +302,25 @@ sub toHtml {
                 value   => 'upload',
                 id      => $self->get('id')
             })->toHtml
-            . "<br />";
+            . "\n";
 	} 
     else {
 		$uploadControl .= WebGUI::Form::Hidden->new($self->session, {
             name    => $self->get("name"), 
             value   => $self->getOriginalValue,
             id      => $self->get("id")
-            })->toHtml()."<br />";
+            })->toHtml()."\n";
 		$uploadControl .= WebGUI::Form::Hidden->new($self->session, {
             name    => $self->privateName('action'), 
             value   => 'keep',
             id      => $self->get("id")
-            })->toHtml()."<br />";
+            })->toHtml()."\n";
 	}
 	if (scalar(@files)) {
         if ($self->get('maxAttachments') == 1) {
             $self->set("");
         }
-        $uploadControl .= $self->getFilePreview($storage);
+        $uploadControl .= "<br />".$self->getFilePreview($storage);
 	}
     return $uploadControl;
 }

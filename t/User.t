@@ -22,7 +22,7 @@ use WebGUI::User;
 use WebGUI::ProfileField;
 use WebGUI::Shop::AddressBook;
 
-use Test::More tests => 226; # increment this value for each test you create
+use Test::More tests => 237; # increment this value for each test you create
 use Test::Deep;
 use Data::Dumper;
 
@@ -30,6 +30,7 @@ my $session = WebGUI::Test->session;
 
 my $testCache = WebGUI::Cache->new($session, 'myTestKey');
 $testCache->flush;
+WebGUI::Test->addToCleanup(sub { $testCache->flush; });
 
 my $user;
 my $lastUpdate;
@@ -37,7 +38,7 @@ my $lastUpdate;
 #Let's try to create a new user and make sure we get an object back
 my $userCreationTime = time();
 ok(defined ($user = WebGUI::User->new($session,"new")), 'new("new") -- object reference is defined');
-WebGUI::Test->usersToDelete($user);
+WebGUI::Test->addToCleanup($user);
 
 #New does not return undef if something breaks, so we'll see if the _profile hash was set.
 ok(exists $user->{_profile}, 'new("new") -- profile subhash exists');  
@@ -77,6 +78,7 @@ cmp_ok(abs($user->lastUpdated-$lastUpdate), '<=', 1, 'lastUpdated() -- status ch
 
 $user->status('Selfdestructed');
 is($user->status, "Selfdestructed", 'status("Selfdestructed")');
+is($user->get('status'), "Selfdestructed", 'status("Selfdestructed") via get');
 
 
 # Deactivation user deletes all sessions and scratches
@@ -86,6 +88,7 @@ $newSession->scratch->set("hasStapler" => "no");
 
 $user->status('Deactivated');
 is($user->status, "Deactivated", 'status("Deactivated")');
+is($user->get('status'), "Deactivated", 'status("Deactivated") via get');
 
 ok( 
     !$session->db->quickScalar("SELECT COUNT(*) from userSession where userId=?",[$user->userId]),
@@ -210,7 +213,7 @@ my $expectValues  = {
     lastName        => "Lumberg",
     status          => "Deactivated",
     timeZone        => 'America/Chicago',
-    gender          => 'neuter',
+    gender          => 'other',
     toolbar         => 'useLanguageDefault',
 };
 
@@ -247,6 +250,7 @@ is($user->profileField('notAProfileField'), undef, 'getting non-existant profile
 
 ##Check for valid profileField access, even if it is not cached in the user object.
 my $newProfileField = WebGUI::ProfileField->create($session, 'testField', {dataDefault => 'this is a test', fieldType => 'Text'});
+WebGUI::Test->addToCleanup($newProfileField);
 is($user->profileField('testField'), 'this is a test', 'getting profile fields not cached in the user object returns the profile field default');
 
 ok(!$user->profileField('wg_privacySettings'), '... wg_privacySettings may not be retrieved');
@@ -412,7 +416,7 @@ $cm->ipFilter(defined $origFilter ? $origFilter : '');
 
 ##Test for group membership
 $user = WebGUI::User->new($session, "new");
-WebGUI::Test->usersToDelete($user);
+WebGUI::Test->addToCleanup($user);
 ok($user->isInGroup(7), "addToGroups: New user is in group 7(Everyone)");
 ok(!$user->isInGroup(1),  "New user not in group 1 (Visitors)");
 ok($user->isRegistered, "User is not a visitor");
@@ -422,7 +426,6 @@ ok($user->isInGroup(3), "addToGroups: New user is in group 3(Admin)");
 ok($user->isInGroup(11), "New user is in group 11(Secondary Admins)");
 ok($user->isInGroup(12), "New user is in group 12(Turn On Admin)");
 ok($user->isInGroup(13), "New user is in group 13(Export Managers)");
-ok($user->isInGroup(14), "New user is in group 14(Product Managers)");
 
 $user->deleteFromGroups([3]);
 ok(!$user->isInGroup(3), "deleteFromGroups: New user is not in group 3(Admin)");
@@ -467,7 +470,7 @@ ok($visitor->isInGroup(7), "Visitor added back to group Everyone");
 ################################################################
 
 my $dude = WebGUI::User->new($session, "new");
-WebGUI::Test->usersToDelete($dude);
+WebGUI::Test->addToCleanup($dude);
 
 ok(!$dude->canUseAdminMode, 'canUseAdminMode: newly created users cannot');
 
@@ -515,6 +518,7 @@ $session->config->delete('adminModeSubnets');
 ################################################################
 
 my $originalVisitorEmail = $visitor->profileField('email');
+WebGUI::Test->addToCleanup(sub {$visitor->profileField('email', $originalVisitorEmail); });
 $visitor->profileField('email', 'visitor@localdomain');
 $dude->profileField('email', 'dude@aftery2k.com');
 
@@ -566,11 +570,12 @@ is($useru->userId, $dude->userId, '... and it is the right user object');
 ################################################################
 
 my $buster = WebGUI::User->new($session, "new");
-WebGUI::Test->usersToDelete($buster);
+WebGUI::Test->addToCleanup($buster);
 is( $buster->profileField('timeZone'), 'America/Chicago', 'buster received original user profile on user creation');
 
 my $profileField = WebGUI::ProfileField->new($session, 'timeZone');
 my %originalFieldData = %{ $profileField->get() };
+WebGUI::Test->addToCleanup(sub { $profileField->set(\%originalFieldData); });
 my %copiedFieldData = %originalFieldData;
 $copiedFieldData{'dataDefault'} = "'America/Hillsboro'";
 $profileField->set(\%copiedFieldData);
@@ -590,12 +595,13 @@ $profileField->set(\%originalFieldData);
 
 my $aliasProfile = WebGUI::ProfileField->new($session, 'alias');
 my %originalAliasProfile = %{ $aliasProfile->get() };
+WebGUI::Test->addToCleanup(sub { $profileField->set(\%originalAliasProfile); });
 my %copiedAliasProfile = %originalAliasProfile;
 $copiedAliasProfile{'dataDefault'} = "'aliasAlias'"; ##Non word characters;
 $aliasProfile->set(\%copiedAliasProfile);
 
 my $buster3 = WebGUI::User->new($session, $buster->userId);
-WebGUI::Test->usersToDelete($buster);
+WebGUI::Test->addToCleanup($buster);
 is($buster3->profileField('alias'), 'aliasAlias', 'default alias set');
 
 $copiedAliasProfile{'dataDefault'} = "'....^^^^....'"; ##Non word characters;
@@ -613,6 +619,7 @@ my %listProfile = %copiedAliasProfile;
 $listProfile{'fieldName'} = 'listProfile';
 $listProfile{'dataDefault'} = "['alpha', 'delta', 'tango']";
 my $listProfileField = WebGUI::ProfileField->create($session, 'listProfile', \%listProfile);
+WebGUI::Test->addToCleanup($listProfileField);
 
 $buster->uncache;
 $buster3 = WebGUI::User->new($session, $buster->userId);
@@ -628,6 +635,7 @@ my %evalProfile = %copiedAliasProfile;
 $evalProfile{'fieldName'} = 'evalProfile';
 $evalProfile{'dataDefault'} = q!$session->scratch->set('hack','true'); 1;!;
 my $evalProfileField = WebGUI::ProfileField->create($session, 'evalProfile', \%evalProfile);
+WebGUI::Test->addToCleanup($evalProfileField);
 
 $buster->uncache;
 my $buster4 = WebGUI::User->new($session, $buster->userId);
@@ -642,7 +650,7 @@ is($session->scratch->get('hack'), undef, 'userProfile dataDefault is not execut
 ##Set up a group that has expired.
 
 my $expiredGroup = WebGUI::Group->new($session, 'new');
-WebGUI::Test->groupsToDelete($expiredGroup);
+WebGUI::Test->addToCleanup($expiredGroup);
 $expiredGroup->name('Group that expires users automatically');
 $expiredGroup->expireOffset(-1000);
 
@@ -671,7 +679,7 @@ cmp_bag($dude->getGroups(1), [2, 7], 'Accessing the cached list of groups does n
 ################################################################
 
 my $friend = WebGUI::User->new($session, 'new');
-WebGUI::Test->usersToDelete($friend);
+WebGUI::Test->addToCleanup($friend);
 is($friend->getFirstName, undef, 'with no profile settings, getFirstName returns undef');
 
 $friend->username('friend');
@@ -688,7 +696,7 @@ is($friend->getFirstName, 'Mr', 'firstName is the highest priority profile setti
 ################################################################
 
 my $neighbor = WebGUI::User->new($session, 'new');
-WebGUI::Test->usersToDelete($neighbor);
+WebGUI::Test->addToCleanup($neighbor);
 
 is($neighbor->getWholeName, undef, 'with no profile settings, getWholeName returns undef');
 $neighbor->username('neighbor');
@@ -747,6 +755,24 @@ undef $neighborClone;
 
 ################################################################
 #
+# friend reciprication
+#
+################################################################
+#
+
+my $buddy1 = WebGUI::User->new($session, 'new');
+WebGUI::Test->addToCleanup($buddy1);
+
+my $buddy2 = WebGUI::User->new($session, 'new');
+WebGUI::Test->addToCleanup($buddy2);
+
+WebGUI::Friends->new( $session, $buddy1 )->add( [ $buddy2->userId ] );
+
+ok( exists $buddy1->friends->getUserList->{ $buddy2->userId }, 'buddy1 has buddy2 in his friends list' );
+ok( exists $buddy2->friends->getUserList->{ $buddy1->userId }, 'buddy2 has buddy1 in his friends list' );
+
+################################################################
+#
 # acceptsPrivateMessages
 #
 ################################################################
@@ -780,7 +806,7 @@ foreach my $groupName (qw/red pink orange blue turquoise lightBlue purple/) {
     $groupSet{$groupName} = WebGUI::Group->new($session, 'new');
     $groupSet{$groupName}->name($groupName);
 }
-WebGUI::Test->groupsToDelete(values %groupSet);
+WebGUI::Test->addToCleanup(values %groupSet);
 
 $groupSet{blue}->expireOffset(-1500);
 
@@ -791,7 +817,7 @@ $groupSet{pink}->addGroups(   [ map { $groupSet{$_}->getId } qw/red/ ] );
 $groupSet{orange}->addGroups( [ map { $groupSet{$_}->getId } qw/red/ ] );
 
 my $newFish = WebGUI::User->new($session, 'new');
-WebGUI::Test->usersToDelete($newFish);
+WebGUI::Test->addToCleanup($newFish);
 $newFish->addToGroups([ $groupSet{red}->getId, $groupSet{blue}->getId ]);
 
 cmp_bag(
@@ -825,7 +851,7 @@ SKIP: {
 ok( my $newCreateUser = WebGUI::User->create( $session ),
     'create() returns something'
 );
-WebGUI::Test->usersToDelete($newCreateUser);
+WebGUI::Test->addToCleanup($newCreateUser);
 isa_ok( $newCreateUser, 'WebGUI::User', 'create() returns a WebGUI::User' );
 
 ################################################################
@@ -906,6 +932,7 @@ ok(  $neighbor->acceptsFriendsRequests($friend), '... follows ableToBeFriend=1')
 
 ok(  $visitor->can('profileIsViewable'), 'profileIsViewable: is a WebGUI::User method');
 my $originalVisitorPublicProfile = $visitor->profileField('publicProfile');
+WebGUI::Test->addToCleanup(sub { $visitor->profileField('publicProfile', $originalVisitorPublicProfile); });
 $visitor->profileField('publicProfile', 'all');
 ok(! $visitor->profileIsViewable, '... visitors profile is not viewable, even if publicProfile=all');
 ok(! $visitor->profileIsViewable($visitor), '... visitor cannot see his own profile');
@@ -942,6 +969,15 @@ is($neighbor->getProfileFieldPrivacySetting('email'), 'none', '...set will not s
 
 is($admin->getProfileFieldPrivacySetting('publicEmail'), 'all', '...get on a user with existing settings');
 is($neighbor->getProfileFieldPrivacySetting('wg_privacySettings'), 'none', '...the privacy field always returns "none"');
+
+my $recentProfileField = WebGUI::ProfileField->create($session, 'recentField', {
+    fieldName             => 'recentField',
+    defaultPrivacySetting => 'all',
+    visible               => 1,
+    label                 => 'recentField',
+});
+WebGUI::Test->addToCleanup($recentProfileField);
+is($neighbor->getProfileFieldPrivacySetting('recentField'), 'all', '...if a field is added and the user does not have privacy data for it, check the original field');
 
 ################################################################
 #
@@ -988,7 +1024,7 @@ $friend->deleteFromGroups([$neighbor->friends->getId]);
 
 $session->setting->set('smsGateway', '');
 my $inmate = WebGUI::User->create($session);
-WebGUI::Test->usersToDelete($inmate);
+WebGUI::Test->addToCleanup($inmate);
 $inmate->profileField('email',     '');
 $inmate->profileField('cellPhone', '');
 $inmate->profileField('receiveInboxEmailNotifications', 0);
@@ -1034,6 +1070,39 @@ is($inmate->getInboxSmsNotificationAddress, '5555555555@textme.com', '... strips
 
 ################################################################
 #
+# isDuplicateEmail
+#
+################################################################
+
+$newFish->profileField( 'email' => 'tommy@shawshank.com' );
+ok( $inmate->isDuplicateEmail( 'tommy@shawshank.com' ), 'isDuplicateEmail triggers for duplicate email' );
+$inmate->profileField( 'email' => 'andy@shawshank.com' );
+ok( !$inmate->isDuplicateEmail( 'andy@shawshank.com' ), "isDuplicateEmail doesn't trigger for our email" );
+
+################################################################
+#
+# validateProfileDataFromForm
+#
+################################################################
+
+my $profileData = {
+    email       => 'tommy@shawshank.com',
+    language    => 'SmoothBankerTalk',
+};
+$session->request->setup_body( $profileData );
+
+# Also check for firstName, which is not in request
+my @fields = map { WebGUI::ProfileField->new( $session, $_ ); } ( keys %$profileData, "firstName" );
+my $reply = $inmate->validateProfileDataFromForm( \@fields );
+
+cmp_deeply( $reply->{errorFields}, [ "language" ], "language isn't found, errors" );
+is( scalar( @{$reply->{errors}} ), 1, "error messages contains one message" );
+cmp_deeply( $reply->{warningFields}, [ "email" ], "email is duplicate, warns" );
+is( scalar( @{$reply->{warnings}} ), 1, "warnings messages contains one message" );
+cmp_deeply( $reply->{profile}, $profileData, "profile data makes it through" );
+
+################################################################
+#
 # delete
 #
 ################################################################
@@ -1041,7 +1110,7 @@ is($inmate->getInboxSmsNotificationAddress, '5555555555@textme.com', '... strips
 ##Specifically, cleaning up Address books
 
 my $shopUser = WebGUI::User->create($session);
-WebGUI::Test->usersToDelete($shopUser);
+WebGUI::Test->addToCleanup($shopUser);
 $session->user({user => $shopUser});
 my $book = WebGUI::Shop::AddressBook->create($session);
 is ($book->get('userId'), $shopUser->userId, 'delete: Address book created with proper user');
@@ -1051,18 +1120,3 @@ undef $book;
 eval { $book = WebGUI::Shop::AddressBook->new($session, $bookId); };
 my $e = Exception::Class->caught();
 isa_ok($e, 'WebGUI::Error::ObjectNotFound', '... cleans up the address book');
-
-END {
-
-    $profileField->set(\%originalFieldData);
-    $aliasProfile->set(\%originalAliasProfile);
-    $listProfileField->delete;
-    $evalProfileField->delete;
-    $visitor->profileField('email',         $originalVisitorEmail);
-    $visitor->profileField('publicProfile', $originalVisitorPublicProfile);
-
-    $newProfileField->delete() if $newProfileField;
-
-	$testCache->flush;
-}
-

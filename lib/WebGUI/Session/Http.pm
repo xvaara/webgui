@@ -17,6 +17,7 @@ package WebGUI::Session::Http;
 
 use strict;
 use WebGUI::Utility;
+use Scalar::Util qw( weaken blessed );
 
 =head1 NAME
 
@@ -98,8 +99,11 @@ sub getCookies {
 	    
 		# Have to require this instead of using it otherwise it causes problems for command-line scripts on some platforms (namely Windows)
 		require APR::Request::Apache2;
-		my $jarHashRef = APR::Request::Apache2->handle($self->session->request)->jar();
+		my $jarHashRef = eval { APR::Request::Apache2->handle($self->session->request)->jar(); };
 		return $jarHashRef if $jarHashRef;
+        if (blessed $@ and $@->isa('APR::Request::Error')) {
+            return $@->jar;
+        }
 		return {};
 	}
 	else {
@@ -209,19 +213,36 @@ sub getStreamedFile {
 
 #-------------------------------------------------------------------
 
-=head2 ifModifiedSince ( epoch )
+=head2 ifModifiedSince ( epoch [, maxCacheTimeout] )
 
 Returns 1 if the epoch is greater than the modified date check.
+
+=head3 epoch
+
+The date that the requested content was last modified in epoch format.
+
+=head3 maxCacheTimeout
+
+A modifier to the epoch, that allows us to set a maximum timeout where content will appear to
+have changed and a new page request will be allowed to be processed.
 
 =cut
 
 sub ifModifiedSince {
-    my $self = shift;
-    my $epoch = shift;
+    my $self            = shift;
+    my $epoch           = shift;
+    my $maxCacheTimeout = shift;
     require APR::Date;
     my $modified = $self->session->request->headers_in->{'If-Modified-Since'};
     return 1 if ($modified eq "");
     $modified = APR::Date::parse_http($modified);
+    ##Implement a step function that increments the epoch time in integer multiples of
+    ##the maximum cache time.  Used to handle the case where layouts containing macros
+    ##(like assetproxied Navigations) can be periodically updated.
+    if ($maxCacheTimeout) {
+        my $delta = time() - $epoch;
+        $epoch   += $delta - ($delta % $maxCacheTimeout);
+    }
     return ($epoch > $modified);
 }
 
@@ -254,7 +275,9 @@ A reference to the current session.
 sub new {
 	my $class = shift;
 	my $session = shift;
-	bless {_session=>$session}, $class;
+	my $self = bless {_session=>$session}, $class;
+        weaken( $self->{_session} );
+        return $self;
 }
 
 
@@ -295,8 +318,14 @@ sub sendHeader {
 		} 
 		# in all other cases, set cache, but tell it to ask us every time so we don't mess with recently logged in users
 		else {
-			$request->headers_out->set('Last-Modified' => $date);
-  			$request->headers_out->set('Cache-Control' => "must-revalidate, max-age=" . $cacheControl);
+            if ( $cacheControl eq "none" ) {
+                $request->headers_out->set("Cache-Control" => "private, max-age=1");
+                $request->no_cache(1);
+            }
+            else {
+                $request->headers_out->set('Last-Modified' => $date);
+                $request->headers_out->set('Cache-Control' => "must-revalidate, max-age=" . $cacheControl);
+            }
 			# do an extra incantation if the HTTP protocol is really old
 			if ($request->protocol =~ /(\d\.\d)/ && $1 < 1.1) {
 				my $date = $datetime->epochToHttp(time() + $cacheControl);

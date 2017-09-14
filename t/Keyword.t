@@ -17,7 +17,7 @@ use WebGUI::Keyword;
 use WebGUI::Asset;
 # load your modules here
 
-use Test::More tests => 14; # increment this value for each test you create
+use Test::More tests => 17; # increment this value for each test you create
 use Test::Deep;
 use Data::Dumper;
 
@@ -30,12 +30,12 @@ isa_ok($home, "WebGUI::Asset");
 my $keyword = WebGUI::Keyword->new($session);
 isa_ok($keyword, "WebGUI::Keyword");
 
-$keyword->setKeywordsForAsset({ asset=>$home, keywords=>"test key, word, foo bar"});
+$keyword->setKeywordsForAsset({ asset=>$home, keywords=>"test key, word, foo & bar"});
 my ($count) = $session->db->quickArray("select count(*) from assetKeyword where assetId=?", [$home->getId]);
 is($count, 3, "setKeywordsForAsset() create");
 cmp_bag(
     $keyword->getKeywordsForAsset({ asset => $home,  asArrayRef => 1}),
-    ['test key', 'word', 'foo bar'],
+    ['test key', 'word', 'foo & bar'],
     '... check correct keywords set, returns array ref'
 );
 
@@ -43,9 +43,18 @@ my $keywords = $keyword->getKeywordsForAsset({ asset => $home, });
 my @keywords = split ',\s*', $keywords;
 cmp_bag(
     \@keywords,
-    ['test key', 'word', 'foo bar'],
+    ['test key', 'word', 'foo & bar'],
     '... check correct keywords set, returns string'
 );
+
+my $cloud = $keyword->generateCloud(
+    {
+        startAsset  => $home,
+        displayFunc => 'view',
+    }
+);
+my $url = $session->url->escape('foo & bar');
+like($cloud, qr/\Q$url\E/, 'escaped urls in generateCloud');
 
 $keyword->setKeywordsForAsset({ asset=>$home, keywords=>"webgui, rules"});
 my ($count) = $session->db->quickArray("select count(*) from assetKeyword where assetId=?", [$home->getId]);
@@ -69,16 +78,34 @@ my $snippet = $home->addChild({
 });
 
 my $tag = WebGUI::VersionTag->getWorking($session);
-WebGUI::Test->tagsToRollback($tag);
+WebGUI::Test->addToCleanup($tag);
 $tag->commit;
 
 my $assetIds = $keyword->getMatchingAssets({ keyword => 'webgui', });
 
 cmp_deeply(
     $assetIds,
-    [$snippet->getId, $home->getId, ],
+    [ $snippet->getId, $home->getId, ],
     'getMatchingAssets, by keyword, assetIds in order by creationDate, descending'
 );
+
+# sorted by title, alphabetically
+
+my $aa_story = $home->addChild({ className => 'WebGUI::Asset::Story', title => "aaaa", keywords => 'webgui' });
+WebGUI::Test->addToCleanup($aa_story);
+
+$assetIds = $keyword->getMatchingAssets({ keyword => 'webgui', sortOrder => 'Alphabetically', });
+
+cmp_deeply(
+    $assetIds,
+    [ $aa_story->getId, $snippet->getId, $home->getId, ],           # 'aaa', 'Home', 'keyword snippet'
+    'getMatchingAssets, by keyword, assetIds in order by title'
+);
+
+$aa_story->trash();
+$aa_story->purge();
+
+# trashed assets
 
 $snippet->trash();
 
@@ -92,6 +119,12 @@ cmp_deeply(
     $keyword->getMatchingAssets({ keyword => 'webgui', states => [ qw/published trash/, ]}),
     [$snippet->getId, $home->getId, ],
     '... retrieving assets in more than one state'
+);
+
+cmp_deeply(
+    $keyword->getTopKeywords(),
+    { 'webgui' => '2' },
+    'check getTopKeywords returns correctly'
 );
 
 $keyword->deleteKeywordsForAsset($home);

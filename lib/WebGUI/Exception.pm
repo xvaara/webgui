@@ -58,8 +58,22 @@ use Exception::Class (
         isa             => 'WebGUI::Error',
         description     => "A template has errors that prevent it from being processed.",
         },
+    'WebGUI::Error::NotInConfig' => {
+        isa             => 'WebGUI::Error',
+        description     => 'A module was requested that does not exist in the configuration file.',
+        fields          => [qw{ module configKey }],
+        },
 );
 
+sub WebGUI::Error::full_message {
+    my $self = shift;
+    my $message = $self->message ? $self->message : $self->description;
+    my @fields = map { defined $self->$_ ? ($_ . ': ' . $self->$_) : () } $self->Fields;
+    if (@fields) {
+        $message .= ' (' . join( q{, }, @fields ) . ')';
+    }
+    return $message;
+}
 
 =head1 NAME
 

@@ -10,14 +10,23 @@
 # http://www.plainblack.com			info@plainblack.com
 #-------------------------------------------------------------------
 
-our ($webguiRoot);
+use strict;
+use File::Basename ();
+use File::Spec;
 
+my $webguiRoot;
 BEGIN {
-    $webguiRoot = "..";
-    unshift (@INC, $webguiRoot."/lib");
+    $webguiRoot = File::Spec->rel2abs(File::Spec->catdir(File::Basename::dirname(__FILE__), File::Spec->updir));
+    unshift @INC, File::Spec->catdir($webguiRoot, 'lib');
+}
+foreach my $libDir ( readLines( "preload.custom" ) ) {
+    if ( !-d $libDir ) {
+        warn "WARNING: Not adding lib directory '$libDir' from preload.custom: Directory does not exist.\n";
+        next;
+    }
+    unshift @INC, $libDir;
 }
 
-use strict;
 use Getopt::Long;
 use WebGUI::Asset;
 use WebGUI::Config;
@@ -87,7 +96,11 @@ sub reindexSite {
 	my @searchableAssetIds;	
 	while (my ($id, $class) = $rs->array) {
 		my $asset = WebGUI::Asset->new($session,$id,$class);
-		if (defined $asset && $asset->get("state") eq "published" && ($asset->get("status") eq "approved" || $asset->get("status") eq "archived")) {
+                if ( !$asset ) {
+                    warn sprintf "- Asset %s (%s) could not be instantiated\n", $id, $class;
+                    next;
+                }
+		if ($asset->get("state") eq "published" && ($asset->get("status") eq "approved" || $asset->get("status") eq "archived")) {
 			print $asset->getId."\t".$asset->getTitle."\t";
 			my $t = [Time::HiRes::gettimeofday()];
 			$asset->indexContent;
@@ -139,6 +152,23 @@ sub updateSite {
 	my $list = $session->db->quoteAndJoin(\@searchableAssetIds) if scalar(@searchableAssetIds);
 	$session->db->write("delete from assetIndex where assetId not in (".$list.")") if $list;
 	print "\nSite indexing took ".Time::HiRes::tv_interval($siteTime)." seconds.\n";
+}
+
+#-------------------------------------------------
+sub readLines {
+    my $file = shift;
+    my @lines;
+    if (open(my $fh, '<', $file)) {
+        while (my $line = <$fh>) {
+            $line =~ s/#.*//;
+            $line =~ s/^\s+//;
+            $line =~ s/\s+$//;
+            next if !$line;
+            push @lines, $line;
+        }
+        close $fh;
+    }
+    return @lines;
 }
 
 __END__

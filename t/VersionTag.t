@@ -14,7 +14,7 @@ use lib "$FindBin::Bin/lib";
 use WebGUI::Test;
 use WebGUI::Session;
 use WebGUI::VersionTag;
-use Test::More tests => 74; # increment this value for each test you create
+use Test::More tests => 85; # increment this value for each test you create
 
 my $session = WebGUI::Test->session;
 
@@ -105,14 +105,36 @@ $tag->clearWorking;
 ok(!defined getWorking(1), 'working tag unset');
 
 ok(!scalar $tag->get('isLocked'), 'tag is initially unlocked');
+ok(!$tag->isLocked,'accessor for isLocked works on false');
 $tag->lock;
 ok(scalar $tag->get('isLocked'), 'tag is locked');
+ok($tag->isLocked, 'accessor for isLocked works on true');
 ok_open($tag->getId, 0, 'locked tag');
 $tag->unlock;
 ok(!scalar $tag->get('isLocked'), 'tag is again unlocked');
 ok_open($tag->getId, 1, 'unlocked tag');
 
-# TODO: test interaction between lock/unlock and working tags
+# test interaction between lock/unlock and working tags
+my $locker = WebGUI::VersionTag->create($session);
+$locker->setWorking();
+is getWorking(1), $locker, 'working tag is the one we are about to lock';
+
+$locker->lock();
+ok !defined getWorking(1), 'lock clears working';
+
+my $unlocked = WebGUI::VersionTag->create($session);
+$unlocked->setWorking();
+is getWorking(1), $unlocked, 'working tag is fresh';
+$locker->setWorking();
+is getWorking(1), $unlocked, 'setWorking on locked tag does nothing';
+$unlocked->clearWorking;
+$unlocked->rollback;
+
+$session->stow->set(versionTag => $locker);
+$session->scratch->set(versionTag => $locker->getId);
+isnt getWorking(1), $locker, 'getWorking never returns locked tag';
+$locker->clearWorking;
+$locker->rollback;
 
 my $tagAgain1 = WebGUI::VersionTag->new($session, $tag->getId);
 isa_ok($tagAgain1, 'WebGUI::VersionTag', 'tag retrieved again while valid');
@@ -162,8 +184,31 @@ is($tag3->getRevisionCount, 5, 'original tag still with five revisions');
 $tag4->clearWorking;
 $tag3->rollback;
 $tag4->rollback;
-($asset1, $asset2, $asset3, $tag3, $tag4) = ();
 
+#Test commitAsUser
+my $tag5   = WebGUI::VersionTag->create($session, {});
+$tag5->setWorking;
+my $asset5 = WebGUI::Asset->getRoot($session)->addChild({ className => 'WebGUI::Asset::Snippet' });
+is($tag5->get("createdBy"),1,'tag created by visitor');
+$tag5->commitAsUser(3);
+$tag5      = WebGUI::VersionTag->new($session, $tag5->getId); #Get the tag again - properties have changed
+is($tag5->get("committedBy"),3,'tag committed by admin');
+$tag5->clearWorking;
+$tag5->rollback;
+
+#Test commitAsUser with options
+my $tag6   = WebGUI::VersionTag->create($session, {});
+$tag6->setWorking;
+my $asset6 = WebGUI::Asset->getRoot($session)->addChild({ className => 'WebGUI::Asset::Snippet' });
+$tag6->commitAsUser(3, { commitNow => "yes" });
+$tag6      = WebGUI::VersionTag->new($session, $tag6->getId); #Get the tag again - properties have changed
+is($tag6->get("committedBy"),3,'tag committed by admin again');
+$asset6    = WebGUI::Asset->newByDynamicClass($session,$asset6->getId); #Get the asset again - properties have changed
+is($asset6->get("status"),"approved","asset status approved");
+$tag6->clearWorking;
+$tag6->rollback;
+
+($asset1, $asset2, $asset3, $asset5, $asset6, $tag3, $tag4, $tag5, $tag6) = ();
 #additional tests for versionTagMode
 # 
 
@@ -216,7 +261,7 @@ is($siteWideTag->getId(), $siteWideTagId, 'versionTagMode siteWide: reclaim site
 ## Through in a new session as different user
 my $admin_session = WebGUI::Session->open($WebGUI::Test::WEBGUI_ROOT, $WebGUI::Test::CONFIG_FILE);
 $admin_session->user({'userId' => 3});
-WebGUI::Test->sessionsToDelete($admin_session);
+WebGUI::Test->addToCleanup($admin_session);
 
 setUserVersionTagMode($admin_session->user(), q{singlePerUser});
 
@@ -280,7 +325,7 @@ $adminUserTag->rollback();
 
     # create admin session
     my $admin_session = WebGUI::Session->open($WebGUI::Test::WEBGUI_ROOT, $WebGUI::Test::CONFIG_FILE);
-    WebGUI::Test->sessionsToDelete($admin_session);
+    WebGUI::Test->addToCleanup($admin_session);
     $admin_session->user({'userId' => 3});
 
     setUserVersionTagMode($admin_session->user(), q{autoCommit});
@@ -332,7 +377,7 @@ $adminUserTag->rollback();
 
     # create admin session
     $admin_session = WebGUI::Session->open($WebGUI::Test::WEBGUI_ROOT, $WebGUI::Test::CONFIG_FILE);
-    WebGUI::Test->sessionsToDelete($admin_session);
+    WebGUI::Test->addToCleanup($admin_session);
     $admin_session->user({'userId' => 3});
 
     setUserVersionTagMode($admin_session->user(), q{autoCommit});

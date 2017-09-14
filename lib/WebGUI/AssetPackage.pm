@@ -63,7 +63,15 @@ Turns this package into a package file and returns the storage location object o
 sub exportPackage {
 	my $self = shift;
 	my $storage = WebGUI::Storage->createTemp($self->session);
-	foreach my $asset (@{$self->getLineage(["self","descendants"],{returnObjects=>1, statusToInclude=>['approved', 'archived']})}) {
+        my $assetIter = $self->getLineageIterator(["self","descendants"],{statusToInclude=>['approved', 'archived']});
+        while ( 1 ) {
+            my $asset;
+            eval { $asset = $assetIter->() };
+            if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+                $self->session->log->error($x->full_message);
+                next;
+            }
+            last unless $asset;
 		my $data = $asset->exportAssetData;
 		$storage->addFileFromScalar($data->{properties}{lineage}.".json", JSON->new->utf8->pretty->encode($data));
 		foreach my $storageId (@{$data->{storage}}) {
@@ -128,6 +136,14 @@ from the asset where it is deployed.
 Forces the package to ignore the revisionDate inside it.  This makes the imported package the
 latest revision of an asset.
 
+=head4 clearPackageFlag
+
+Clears the isPackage flag on the incoming asset.
+
+=head4 setDefaultTemplate
+
+Set the isDefault flag on the incoming asset.  Really only works on templates.
+
 =cut
 
 sub importAssetData {
@@ -149,6 +165,12 @@ sub importAssetData {
         delete $properties{ownerUserId};
         delete $properties{groupIdView};
         delete $properties{groupIdEdit};
+    }
+    if ($options->{clearPackageFlag}) {
+        $properties{isPackage} = 0;
+    }
+    if ($options->{setDefaultTemplate}) {
+        $properties{isDefault} = 1;
     }
     if ($revisionExists) { # update an existing revision
         $asset = WebGUI::Asset->new($self->session, $id, $class, $version);
@@ -175,16 +197,10 @@ sub importAssetData {
         };
         if (defined $asset) {   # create a new revision of an existing asset
             $error->info("Creating a new revision of asset $id");
-            $asset = $asset->addRevision($data->{properties}, $version, {skipAutoCommitWorkflows => 1});
+            $asset = $asset->addRevision(\%properties, $version, {skipAutoCommitWorkflows => 1});
         }
         else {  # add an entirely new asset
             $error->info("Adding $id that didn't previously exist.");
-            my %properties = %{ $data->{properties} };
-            if ($options->{inheritPermissions}) {
-                $properties{ownerUserId} = $self->get('ownerUserId');
-                $properties{groupIdView} = $self->get('groupIdView');
-                $properties{groupIdEdit} = $self->get('groupIdEdit');
-            }
             $asset = $self->addChild(\%properties, $id, $version, {skipAutoCommitWorkflows => 1});
         }
     }
@@ -236,15 +252,25 @@ sub importPackage {
     my $decompressed    = $storage->untar($storage->getFiles->[0]);
     return undef
         if $storage->getErrorCount;
-    my %assets          = ();               # All the assets we've imported
     my $package         = undef;            # The asset package
     my $error           = $self->session->errorHandler;
+
+    # The debug output for long requests would be too long, and we'd have to
+    # keep it all in memory.
+    $error->preventDebugOutput();
     $error->info("Importing package.");
+
+    # Your parent is on this stack somewhere because we're going through these
+    # assets depth-first.  This way we only have to keep one branch in-memory
+    # at a time, and it's always the right branch.
+    my @stack;
+    my $json = JSON->new->utf8->relaxed(1);
+
     foreach my $file (sort(@{$decompressed->getFiles})) {
         next unless ($decompressed->getFileExtension($file) eq "json");
         $error->info("Found data file $file");
         my $data = eval {
-            JSON->new->utf8->relaxed(1)->decode($decompressed->getFileContentsAsScalar($file))
+            $json->decode($decompressed->getFileContentsAsScalar($file))
         };
         if ($@ || $data->{properties}{assetId} eq "" || $data->{properties}{className} eq "" || $data->{properties}{revisionDate} eq "") {
             $error->error("package corruption: ".$@) if ($@);
@@ -255,20 +281,27 @@ sub importPackage {
             my $assetStorage = WebGUI::Storage->get($self->session, $storageId);
             $decompressed->untar($storageId.".storage", $assetStorage);
         }
-        my $asset = $assets{$data->{properties}{parentId}} || $self;
+
+        my $parentId = $data->{properties}->{parentId};
+        my $asset;
+        while ($asset = pop(@stack)) {
+            if ($asset->getId eq $parentId) {
+                push(@stack, $asset);
+                last;
+            }
+        }
+        $asset ||= $self;
+
         my $newAsset = $asset->importAssetData($data, $options);
         $newAsset->importAssetCollateralData($data);
-        $assets{$newAsset->getId} = $newAsset;
-        # First imported asset must be the "package"
 
-        unless ($package) {
-            $package            = $newAsset;
-        }
+        push(@stack, $newAsset);
+
+        # First imported asset must be the "package"
+        $package ||= $newAsset;
     }
 
-    return $package
-        if $package;
-    return 'corrupt';
+    return $package || 'corrupt';
 }
 
 #-------------------------------------------------------------------
@@ -338,10 +371,12 @@ sub www_exportPackage {
 =cut
 
 sub www_importPackage {
-	my $self = shift;
-	return $self->session->privilege->insufficient() unless ($self->canEdit && $self->session->user->isInGroup(4));
-	my $storage = WebGUI::Storage->createTemp($self->session);
-    my $inheritPermissions = $self->session->form->process('inheritPermissions');
+	my $self    = shift;
+	my $session = $self->session;
+	return $session->privilege->insufficient() unless ($self->canEdit && $session->user->isInGroup(4));
+
+	my $form    = $session->form;
+	my $storage = WebGUI::Storage->createTemp($session);
 
 	##This is a hack.  It should use the WebGUI::Form::File API to insulate
 	##us from future form name changes.
@@ -349,19 +384,25 @@ sub www_importPackage {
 
 	my $error = "";
 	if ($storage->getFileExtension($storage->getFiles->[0]) eq "wgpkg") {
-		$error = $self->importPackage($storage, {inheritPermissions => $inheritPermissions});
+		$error = $self->importPackage(
+			$storage, {
+				inheritPermissions => $form->get('inheritPermissions'),
+				clearPackageFlag   => $form->get('clearPackageFlag'),
+			}
+		);
 	}
 	if (!blessed $error) {
-		my $i18n = WebGUI::International->new($self->session, "Asset");
-        if ($error eq 'corrupt') {
-            return $self->session->style->userStyle($i18n->get("package corrupt"));
-        }
-        else {
-            return $self->session->style->userStyle($i18n->get("package extract error"));
-        }
+		my $i18n  = WebGUI::International->new($session, "Asset");
+		my $style = $session->style;
+		if ($error eq 'corrupt') {
+			return $style->userStyle($i18n->get("package corrupt"));
+		}
+		else {
+			return $style->userStyle($i18n->get("package extract error"));
+		}
 	}
     # Handle autocommit workflows
-    if (WebGUI::VersionTag->autoCommitWorkingIfEnabled($self->session, {
+    if (WebGUI::VersionTag->autoCommitWorkingIfEnabled($session, {
         allowComments   => 1,
         returnUrl       => $self->getUrl,
     }) eq 'redirect') {

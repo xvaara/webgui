@@ -29,8 +29,10 @@ use WebGUI::User;
 use WebGUI::Operation::Shared;
 use WebGUI::Operation::Profile;
 use WebGUI::Workflow::Instance;
+use WebGUI::Shop::AddressBook;
 use WebGUI::Inbox;
 use WebGUI::Friends;
+use URI;
 
 # Profile field name for the number of times the showMessageOnLogin has been
 # seen.
@@ -310,8 +312,40 @@ sub createAccountSave {
 	my $userId = $u->userId;
 	$u->username($username);
 	$u->authMethod($self->authMethod);
+	if (!$profile->{'language'} && $self->session->scratch->getLanguageOverride) {
+	    $profile->{'language'} = $self->session->scratch->getLanguageOverride;
+	}
 	$u->karma($self->session->setting->get("karmaPerLogin"),"Login","Just for logging in.") if ($self->session->setting->get("useKarma"));
 	$u->updateProfileFields($profile) if ($profile);
+    #Update the shop address
+    my $address          = {};
+    my $address_mappings = WebGUI::Shop::AddressBook->getProfileAddressMappings;
+    foreach my $fieldId (keys %$profile) {
+        #set the shop address fields
+        my $address_key          = $address_mappings->{$fieldId};
+        $address->{$address_key} = $profile->{$fieldId} if ($address_key);
+    }
+
+    #Update or create and update the shop address
+    if ( keys %$address ) {
+        $address->{'isProfile'        } = 1;
+
+        #Get home address only mappings to avoid creating addresses with just firstName, lastName, email
+        my %home_address_map = %{$address_mappings};
+        foreach my $exclude ( qw{ firstName lastName email } ) {
+            delete $home_address_map{$exclude};
+        }
+        #Add the profile address for the user if there are homeAddress fields
+        if( grep { $address->{$_} } values %home_address_map ) {
+            #Create the address book for the user
+            my $addressBook    = WebGUI::Shop::AddressBook->newByUserId($self->session,$userId);
+            $address->{label} = "Profile Address";
+            my $new_address = $addressBook->addAddress($address);
+            #Set this as the default address if one doesn't already exist
+            $addressBook->update( { defaultAddressId => $new_address->getId } );
+        }
+    }
+
     $self->saveParams($userId,$self->authMethod,$properties);
 
 	if ($self->getSetting("sendWelcomeMessage")){
@@ -406,7 +440,7 @@ sub deactivateAccount {
 	$var{'yes.label'} = $i18n->get(44);
    	$var{'no.url'} = $self->session->url->page();
 	$var{'no.label'} = $i18n->get(45);
-	return WebGUI::Asset::Template->new($self->session,"PBtmpl0000000000000057")->process(\%var);
+	return WebGUI::Asset::Template->new($self->session,$self->getDeactivateAccountTemplateId)->process(\%var);
 }
 
 #-------------------------------------------------------------------
@@ -555,9 +589,11 @@ sub displayLogin {
     my $i18n = WebGUI::International->new($self->session);
     $vars->{title} = $i18n->get(66);
     my $action;
-    if ($self->session->setting->get("encryptLogin")) {
-        $action = $self->session->url->page(undef,1);
-        $action =~ s/http:/https:/;
+    if ($self->session->config->get('sslEnabled') && $self->session->setting->get("encryptLogin")) {
+        my $uri = URI->new($self->session->url->page(undef,1));
+        $uri->scheme('https');
+        $uri->host_port($uri->host);
+        $action = $uri->as_string;
     }
     $vars->{'login.form.header'} = WebGUI::Form::formHeader($self->session,{action=>$action});
     $vars->{'login.form.hidden'} = WebGUI::Form::hidden($self->session,{"name"=>"op","value"=>"auth"});
@@ -571,7 +607,8 @@ sub displayLogin {
     $vars->{'anonymousRegistration.isAllowed'} = ($self->session->setting->get("anonymousRegistration"));
     $vars->{'createAccount.url'} = $self->session->url->page('op=auth;method=createAccount');
     $vars->{'createAccount.label'} = $i18n->get(67);
-    return WebGUI::Asset::Template->new($self->session,$self->getLoginTemplateId)->process($vars);
+    my $template = $self->getLoginTemplate;
+    return $template->process($vars);
 }
 
 #-------------------------------------------------------------------
@@ -661,6 +698,30 @@ sub getCreateAccountTemplateId {
 
 #-------------------------------------------------------------------
 
+=head2 getDeactivateAccountTemplateId ( )
+
+This method should be overridden by the subclass and should return the template ID for the deactivate account screen.
+
+=cut
+
+sub getDeactivateAccountTemplateId {
+	return "PBtmpl0000000000000057";
+}
+
+#-------------------------------------------------------------------
+
+=head2 getDefaultLoginTemplateId ( )
+
+This method should be overridden by the subclass and should return the default template ID for the login screen.
+
+=cut
+
+sub getDefaultLoginTemplateId {
+	return "PBtmpl0000000000000013";
+}
+
+#-------------------------------------------------------------------
+
 =head2 getExtrasStyle ( )
 
 This method returns the proper field to display for required fields.
@@ -678,6 +739,27 @@ sub getExtrasStyle {
     return $errorStyle if($self->error && $value eq "");
     return $requiredStyle unless($value);
     return $requiredStyleOff;
+}
+
+#-------------------------------------------------------------------
+
+=head2 getLoginTemplate ( )
+
+Returns a WebGUI::Asset::Template object for the login template.  If the configured
+template cannot be used, then it returns a default template object.
+
+=cut
+
+sub getLoginTemplate {
+    my $self    = shift;
+    my $session = $self->session;
+    my $templateId = $self->getLoginTemplateId;
+    my $template   = WebGUI::Asset::Template->newByDynamicClass($session, $templateId);
+    if (!$template) {
+        $templateId = $self->getDefaultLoginTemplateId;
+        $template   = WebGUI::Asset::Template->newByDynamicClass($session, $templateId);
+    }
+	return $template;
 }
 
 #-------------------------------------------------------------------
@@ -701,8 +783,8 @@ Returns a hash reference with the user's authentication information.  This metho
 =cut
 
 sub getParams {
-	my $self = shift;
-	my $userId = $_[0] || $self->userId;
+	my $self       = shift;
+	my $userId     = $_[0] || $self->userId;
 	my $authMethod = $_[1] || $self->authMethod;
 	return $self->session->db->buildHashRef("select fieldName, fieldData from authentication where userId=".$self->session->db->quote($userId)." and authMethod=".$self->session->db->quote($authMethod));
 }
@@ -763,7 +845,9 @@ Returns whether or not a method is callable
 
 sub isCallable {
 	my $self = shift;
-	return isIn($_[0],@{$self->{callable}})
+	return 1 if isIn($_[0],@{$self->{callable}});
+        return 1 if $self->can( 'www_' . $_[0] );
+        return 0;
 }
 
 #-------------------------------------------------------------------
@@ -805,20 +889,13 @@ Open version tag is reclaimed if user is in site wide or singlePerUser mode.
 
 sub login {
 	my $self = shift;
-	my ($cmd, $uid, $u);
 
 	#Create a new user
-	$uid = $self->userId;
-	$u = WebGUI::User->new($self->session,$uid);
+	my $uid = $self->userId;
+	my $u = WebGUI::User->new($self->session,$uid);
    	$self->session->user({user=>$u});
 	$u->karma($self->session->setting->get("karmaPerLogin"),"Login","Just for logging in.") if ($self->session->setting->get("useKarma"));
 	$self->_logLogin($uid,"success");
-
-	if ($self->session->setting->get('encryptLogin')) {
-		my $currentUrl = $self->session->url->page(undef,1);
-		$currentUrl =~ s/^https:/http:/;
-		$self->session->http->setRedirect($currentUrl);
-	}
 
         # Run on login
 	my $command = $self->session->config->get("runOnLogin");
@@ -829,29 +906,35 @@ sub login {
 	}
 	
 
-        # Set the proper redirect
-        if ( $self->session->setting->get( 'showMessageOnLogin' ) 
-            && $self->user->profileField( $LOGIN_MESSAGE_SEEN ) 
-                < $self->session->setting->get( 'showMessageOnLoginTimes' ) 
-        ) {
-            return $self->showMessageOnLogin;
-        }
-        elsif ( $self->session->setting->get("redirectAfterLoginUrl") ) {
-        $self->session->http->setRedirect($self->session->setting->get("redirectAfterLoginUrl"));
-        }
-        elsif ( $self->session->form->get('returnUrl') ) {
+    # Set the proper redirect
+    if ( $self->session->setting->get( 'showMessageOnLogin' ) 
+        && $self->user->profileField( $LOGIN_MESSAGE_SEEN ) 
+            < $self->session->setting->get( 'showMessageOnLoginTimes' ) 
+    ) {
+        return $self->showMessageOnLogin;
+    }
+    elsif ( $self->session->form->get('returnUrl') ) {
 		$self->session->http->setRedirect( $self->session->form->get('returnUrl') );
 	  	$self->session->scratch->delete("redirectAfterLogin");
-        }
-	elsif ( $self->session->scratch->get("redirectAfterLogin") ) {
-		$self->session->http->setRedirect($self->session->scratch->get("redirectAfterLogin"));
-	  	$self->session->scratch->delete("redirectAfterLogin");
+    }
+	elsif ( my $url = $self->session->scratch->delete("redirectAfterLogin") ) {
+		$self->session->http->setRedirect($url);
+	}
+    elsif ( $self->session->setting->get("redirectAfterLoginUrl") ) {
+        $self->session->http->setRedirect($self->session->setting->get("redirectAfterLoginUrl"));
+        $self->session->scratch->delete("redirectAfterLogin");
+    }
+	elsif ($self->session->config->get('sslEnabled') && $self->session->setting->get('encryptLogin')) {
+		my $currentUrl = URI->new($self->session->url->page(undef,1));
+        $currentUrl->scheme('http');
+        $currentUrl->port($self->session->config->get('webServerPort') || 80);
+		$self->session->http->setRedirect($currentUrl->canonical->as_string);
 	}
 
-        # Get open version tag. This is needed if we want
-        # to reclaim a version right after login (singlePerUser and siteWide mode)
-        # and to have the correct version displayed.
-        WebGUI::VersionTag->getWorking($self->session(), q{noCreate});
+    # Get open version tag. This is needed if we want
+    # to reclaim a version right after login (singlePerUser and siteWide mode)
+    # and to have the correct version displayed.
+    WebGUI::VersionTag->getWorking($self->session(), q{noCreate});
 
 	return undef;
 }
@@ -877,6 +960,9 @@ sub logout {
        my $error = qx($command);
        $self->session->errorHandler->warn($error) if $error;
     }
+
+    # Do not allow caching of the logout page (to ensure the page gets requested)
+    $self->session->http->setCacheControl( "none" );
    
 	return undef;
 }
@@ -1016,18 +1102,27 @@ sub showMessageOnLogin {
     WebGUI::Macro::process( $self->session, \$output );
 
     # Add the link to continue
-    my $redirectUrl =  $self->session->form->get( 'returnUrl' )
-                    || $self->session->setting->get("redirectAfterLoginUrl")
-                    || $self->session->scratch->get( 'redirectAfterLogin' )
-                    || $self->session->url->getSiteURL . $self->session->url->gateway()
+    my $session = $self->session;
+    my $redirectUrl =  $session->form->get( 'returnUrl' )
+                    || $session->setting->get("redirectAfterLoginUrl")
+                    || $session->scratch->get( 'redirectAfterLogin' )
+                    || $session->url->getBackToSiteURL
                     ;
 
+    if ($self->session->config->get('sslEnabled') && $session->setting->get('encryptLogin') && ( ! $redirectUrl =~ /^http/)) {
+        ##A scheme-less URL has been supplied.  We need to make it an absolute one
+        ##with a non-encrypted scheme.  Otherwise the user will stay in SSL mode.
+        ##We assume that the user put the gateway URL into their URL.
+        my $uri = URI->new_abs($redirectUrl, $session->url->getSiteURL);
+        $uri->scheme('http');
+        $redirectUrl = $uri->as_string;
+    }
     $output     .= '<p><a href="' . $redirectUrl . '">' . $i18n->get( 'showMessageOnLogin return' ) 
                 .  '</a></p>'
                 ;
 
     # No matter what, we won't be redirecting after this
-    $self->session->scratch->delete( 'redirectAfterLogin' );
+    $session->scratch->delete( 'redirectAfterLogin' );
 
     return $output;
 }

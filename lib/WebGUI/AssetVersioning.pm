@@ -92,7 +92,7 @@ sub addRevision {
 
     my $autoCommitId     = $self->getAutoCommitWorkflowId() unless ($options->{skipAutoCommitWorkflows});
 
-    my $workingTag;
+    my ($workingTag, $oldWorking);
     if ( $autoCommitId ) {
         $workingTag  
             = WebGUI::VersionTag->create( $self->session, { 
@@ -109,7 +109,9 @@ sub addRevision {
             $workingTag = WebGUI::VersionTag->getWorking( $self->session );
         }
         else {
+            $oldWorking = WebGUI::VersionTag->getWorking($self->session, 'noCreate');
             $workingTag = WebGUI::VersionTag->new( $self->session, $parentAsset->get('tagId') );
+            $workingTag->setWorking();
         }
     }
     
@@ -148,6 +150,23 @@ sub addRevision {
             );
         }
     }
+
+    # Copy metadata values
+    my $db    = $self->session->db;
+    my $id    = $self->getId;
+    my $then  = $self->get('revisionDate');
+    my $mdget = q{
+        select fieldId, value from metaData_values
+        where assetId = ? and revisionDate = ?
+    };
+    my $mdset = q{
+        insert into metaData_values (fieldId, value, assetId, revisionDate)
+        values (?, ?, ?, ?)
+    };
+    for my $row (@{ $db->buildArrayRefOfHashRefs($mdget, [ $id, $then ]) }) {
+        $db->write($mdset, [ $row->{fieldId}, $row->{value}, $id, $now ]);
+    }
+
     $self->session->db->commit;
 	
 	# merge the defaults, current values, and the user set properties
@@ -163,6 +182,7 @@ sub addRevision {
     $newVersion->setVersionLock;
     $newVersion->update(\%mergedProperties);
     $newVersion->setAutoCommitTag($workingTag) if (defined $autoCommitId);
+    $oldWorking->setWorking if $oldWorking;
     
     return $newVersion;
 }
@@ -274,7 +294,8 @@ sub getRevisionCount {
 
 =head2 getRevisions ( [ status ] )
 
-Returns an array reference of the revision objects of this asset.
+Returns an array reference of the revision objects of this asset, sorted by revision date in descending
+order.  The most recent version will always be first.
 
 =head3 status
 
@@ -367,12 +388,16 @@ sub purgeRevision {
 	if ($self->getRevisionCount > 1) {
 		$self->session->db->beginTransaction;
         	foreach my $definition (@{$self->definition($self->session)}) {
-			$self->session->db->write("delete from ".$definition->{tableName}." where assetId=? and revisionDate=?",[$self->getId, $self->get("revisionDate")]);
+			$self->session->db->write("delete from ".$self->session->db->dbh->quote_identifier($definition->{tableName})." where assetId=? and revisionDate=?",[$self->getId, $self->get("revisionDate")]);
         	}
 		my ($count) = $self->session->db->quickArray("select count(*) from assetData where assetId=? and status='pending'",[$self->getId]);
 		if ($count < 1) {
 			$self->session->db->write("update asset set isLockedBy=null where assetId=?",[$self->getId]);
 		}
+		$self->session->db->write(
+			'delete from metaData_values where assetId=?  and revisionDate=?',
+			[ $self->getId, $self->get('revisionDate') ]
+		);
         	$self->session->db->commit;
 		$self->purgeCache;
 		$self->updateHistory("purged revision ".$self->get("revisionDate"));
@@ -480,6 +505,7 @@ Sets a flag so that developers know whether to send notifications out on certain
 sub setSkipNotification {
 	my $self = shift;
 	$self->session->db->write("update assetData set skipNotification=1 where assetId=? and revisionDate=?", [$self->getId, $self->get("revisionDate")]);
+    $self->{_properties}->{skipNotification} = 1;
 }
 
 #-------------------------------------------------------------------

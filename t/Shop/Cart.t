@@ -17,12 +17,15 @@ use FindBin;
 use strict;
 use lib "$FindBin::Bin/../lib";
 use Test::More;
+use Test::Deep;
+use Test::Exception;
 use Scalar::Util qw/refaddr/;
 use WebGUI::Test; # Must use this before any other WebGUI modules
 use WebGUI::Session;
 use WebGUI::Asset;
 use WebGUI::Shop::Cart;
 use WebGUI::TestException;
+use JSON 'from_json';
 
 
 #----------------------------------------------------------------------------
@@ -33,7 +36,7 @@ my $i18n = WebGUI::International->new($session, "Shop");
 #----------------------------------------------------------------------------
 # Tests
 
-plan tests => 30;        # Increment this number for each test you create
+plan tests => 38;        # Increment this number for each test you create
 
 #----------------------------------------------------------------------------
 # put your tests here
@@ -48,7 +51,10 @@ throws_deeply ( sub { my $cart = WebGUI::Shop::Cart->newBySession(); },
     'newBySession takes an exception to not giving it a session variable'
 );
 
+$session->user({userId => 3});
+
 my $cart = WebGUI::Shop::Cart->newBySession($session);
+WebGUI::Test->addToCleanup($cart);
 
 isa_ok($cart, "WebGUI::Shop::Cart");
 isa_ok($cart->session, "WebGUI::Session");
@@ -62,6 +68,7 @@ my $product = $root->addChild({
     className=>"WebGUI::Asset::Sku::Donation",
     title=>"Test Product",
     });
+WebGUI::Test->addToCleanup($product);
 $product->applyOptions({price=>50.25});
 my $item = $cart->addItem($product);
 isa_ok($item, "WebGUI::Shop::CartItem");
@@ -100,16 +107,33 @@ isa_ok($cart->getAddressBook, "WebGUI::Shop::AddressBook", "can get an address b
 #
 
 # Setup a checkout'able cart and verify that it is
-my $address = $cart->getAddressBook->addAddress( { firstName => 'C.D.', lastName => 'Murray'} );
+my $address = $cart->getAddressBook->addAddress( {
+    label     => 'cell block',
+    firstName => 'C.D.',           lastName => 'Murray',
+    address1  => 'cell block #5',
+    city      => 'Shawshank',      state     => 'MN',
+    code      => '55555',          country   => 'United States of America',
+    phoneNumber => '555.555.5555', email     => 'newFish@shawshank.gov',
+} );
 my $ship    = WebGUI::Shop::Ship->new( $session );
 my $shipper = $ship->addShipper( 'WebGUI::Shop::ShipDriver::FlatRate', {flatFee => 1 } );
+WebGUI::Test->addToCleanup($shipper);
 $cart->update( {
     shippingAddressId   => $address->getId,
 } );
 ok(! $cart->readyForCheckout, 'readyForCheckout:  returns false due to no shipperId');
 
-$cart->update( { shipperId           => $shipper->getId, } );
-ok($cart->readyForCheckout, '... returns true when it has shipperId, and shipping address');
+my $pay     = WebGUI::Shop::Pay->new($session);
+my $gateway = $pay->getPaymentGateways()->[0];
+
+$cart->error('');
+$cart->update( {
+    shipperId           => $shipper->getId,
+    billingAddressId    => $address->getId,
+    gatewayId           => $gateway->getId,
+} );
+ok($cart->readyForCheckout, '... returns true when it has shipperId, shipping and billing addresses and a gatewayId')
+    || diag $cart->error;
 
 # Check shipping address constraint
 $cart->update( {shippingAddressId   => 'Does Not Exist'} );
@@ -134,9 +158,10 @@ is($session->db->quickScalar("select count(*) from cartItem where cartId=?",[ $c
 
 
 my $session2 = WebGUI::Session->open(WebGUI::Test->root, WebGUI::Test->file);
-WebGUI::Test->sessionsToDelete($session2);
+WebGUI::Test->addToCleanup($session2);
 $session2->user({userId => 3});
 my $cart2 = WebGUI::Shop::Cart->newBySession($session2);
+WebGUI::Test->addToCleanup($cart2);
 isnt(
     refaddr $cart->getAddressBook,
     refaddr $cart2->getAddressBook,
@@ -145,6 +170,7 @@ isnt(
 $cart2->delete;
 
 my $cart3 = WebGUI::Shop::Cart->newBySession($session);
+WebGUI::Test->addToCleanup($cart3);
 isnt(
     refaddr $cart->getAddressBook,
     refaddr $cart3->getAddressBook,
@@ -156,12 +182,53 @@ $cart->delete;
 is($cart->delete, undef, "Can destroy cart.");
 
 
+# Test (shipping part of) www_ajaxPrices
+{
+    local *WebGUI::Shop::Ship::getOptions = sub { [ qw{ a b c } ] };
+    
+    $cart->update( { shippingAddressId   => $address->getId } );
+
+    my $response = from_json $cart->www_ajaxPrices;
+    cmp_deeply(
+        $response->{ shipping },
+        [ qw{ a b c } ],
+        'shipping contains available shipping option when no shipper is passed',
+    );
+    is( $cart->get('shippingAddressId'), $address->getId, 'calling www_ajaxPrices w/o shipperId doesn\'t change the cart shipperId' );
+
+    local *WebGUI::Session::Form::get = sub { return 'OtherShippert' };
+    $response = from_json $cart->www_ajaxPrices;
+    cmp_deeply(
+        $response->{ shipping },
+        [ qw{ a b c } ],
+        'shipping contains available shipping option when a shipper is passed',
+    );
+    is( $cart->get('shippingAddressId'), 'OtherShippert', 'calling www_ajaxPrices w/ shipperId updates the cart shipperId' );
+
+    $cart->update( { shippingAddressId => $shipper->getId } );
+}
+
+# Test (part of) www_view
+{
+    my $shippingAddressId   = $cart->get( 'shippingAddressId'   );
+    my $billingAddressId    = $cart->get( 'billingAddressId'    );
+
+    $cart->update( { shippingAddressId => 'NoWayDude' } );
+    eval { $cart->www_view };
+    is( $@, '', 'Invalid shippingAddressId doesn\'t make www_view crash' );
+
+    $cart->update( { billingAddressId => 'WRONG!!!!', shippingAddressId => $shippingAddressId } );
+    eval { $cart->www_view };
+    is( $@, '', 'Invalid billingAddressId doesn\'t make www_view crash' );
+
+    $cart->update( { billingAddressId => $billingAddressId } );
+}
+
 $product->purge;
 
-#----------------------------------------------------------------------------
-# Cleanup
-END {
-    if ($shipper) {
-        $shipper->delete;
-    }
+my $requiresShipping_ok = lives_ok { $cart->requiresShipping; } 'requiresShipping does not die if the asset in the cart has been deleted';
+
+SKIP: {
+    skip 1, 'requiresShipping died, so skipping' unless $requiresShipping_ok;
+    ok !$cart->requiresShipping, 'Shipping no longer required on a cart with missing assets';
 }

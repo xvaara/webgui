@@ -31,6 +31,7 @@ use Test::Deep::Shallow;
 use Test::Deep::Blessed;
 use Test::Deep::Isa;
 use Test::Deep::Set;
+use Test::Exception;
 
 use WebGUI::Pluggable;
 
@@ -41,7 +42,7 @@ use WebGUI::Pluggable;
 #----------------------------------------------------------------------------
 # Tests
 
-plan tests => 8;        # Increment this number for each test you create
+plan tests => 19;        # Increment this number for each test you create
 
 #----------------------------------------------------------------------------
 # put your tests here
@@ -61,6 +62,15 @@ is($dumper->Dump, q|$VAR1 = {
           'color' => 'black'
         };
 |, "Can instanciate an object.");
+
+dies_ok { WebGUI::Pluggable::load( '::HA::HA' ) } 'load dies on bad input';
+like( $@, qr/^\QInvalid module name: ::HA::HA/, 'helpful error message' );
+
+dies_ok { WebGUI::Pluggable::load( 'HA::HA::' ) } 'load dies on bad input';
+dies_ok { WebGUI::Pluggable::load( 'HA::..::..::HA' ) } 'load dies on bad input';
+dies_ok { WebGUI::Pluggable::load( '..::..::..::HA' ) } 'load dies on bad input';
+dies_ok { WebGUI::Pluggable::load( 'uploads::ik::jo::ikjosdfwefsdfsefwef::myfile.txt\0.pm' ) } 'load dies on bad input';
+dies_ok { WebGUI::Pluggable::load( 'HA::::HA' ) } 'load dies on bad input';
 
 #----------------------------------------------------------------------------
 # Test find and findAndLoad
@@ -82,7 +92,7 @@ is($dumper->Dump, q|$VAR1 = {
         },
         File::Spec->catfile( $lib, 'WebGUI', 'i18n' ),
     );
-    
+
     cmp_deeply(
         [ WebGUI::Pluggable::find( 'WebGUI::i18n' ) ],
         bag( @testFiles ),
@@ -100,18 +110,40 @@ is($dumper->Dump, q|$VAR1 = {
         bag( grep { $_ ne 'WebGUI::i18n::English::WebGUI' } @testFiles ),
         "find() with exclude",
     );
-    
+
+    cmp_deeply(
+        [ WebGUI::Pluggable::find( 'WebGUI::i18n', { exclude => [ 'WebGUI::i18n::English::WebGUI*' ] } ) ],
+        bag( grep { $_ ne 'WebGUI::i18n::English::WebGUI' && $_ ne 'WebGUI::i18n::English::WebGUIProfile' } @testFiles ),
+        "find() with exclude with glob",
+    );
+
+    cmp_deeply(
+        [ WebGUI::Pluggable::find( 'WebGUI::i18n', { exclude => [ 'WebGUI::i18n::English*' ] } ) ],
+        [], 
+        "find() with exclude with massive glob",
+    );
+
+    cmp_deeply(
+        [ WebGUI::Pluggable::find( 'WebGUI::i18n', { exclude => [ 'WebGUI::i18n::English::WebGUI.*' ] } ) ],
+        bag( grep { $_ ne 'WebGUI::i18n::English::WebGUI' && $_ ne 'WebGUI::i18n::English::WebGUIProfile' } @testFiles ),
+        "find() with exclude with regex",
+    );
+
+    cmp_deeply(
+        [ WebGUI::Pluggable::find( 'WebGUI::i18n', { exclude => [ qw/WebGUI::i18n::English::WebGUI.* WebGUI::i18n::English::ShipDriver_USPS*/ ] } ) ],
+        bag( grep {
+            $_ ne 'WebGUI::i18n::English::WebGUI'
+         && $_ ne 'WebGUI::i18n::English::WebGUIProfile'
+         && $_ ne 'WebGUI::i18n::English::ShipDriver_USPS'
+         && $_ ne 'WebGUI::i18n::English::ShipDriver_USPSInternational'
+        } @testFiles ),
+        "find() with multiple excludes",
+    );
+
     cmp_deeply( 
         [ WebGUI::Pluggable::find( 'WebGUI::i18n', { onelevel => 1, return => "name" } ) ],
         bag( map { /::([^:]+)$/; $1 } grep { /^WebGUI::i18n::[^:]+$/ } @testFiles ),
         "find() with return => name",
     );
 };
-
-#----------------------------------------------------------------------------
-# Cleanup
-
-END {
-
-}
-
+#vim:ft=perl

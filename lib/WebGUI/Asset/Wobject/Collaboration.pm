@@ -27,13 +27,19 @@ use base qw(WebGUI::AssetAspect::RssFeed WebGUI::Asset::Wobject);
 #-------------------------------------------------------------------
 sub _computePostCount {
 	my $self = shift;
-	return scalar @{$self->getLineage(['descendants'], {includeOnlyClasses => ['WebGUI::Asset::Post']})};
+	return $self->getDescendantCount({
+            includeOnlyClasses => ['WebGUI::Asset::Post'],
+            statusToInclude     => ['approved'],
+        });
 }
 
 #-------------------------------------------------------------------
 sub _computeThreadCount {
 	my $self = shift;
-	return scalar @{$self->getLineage(['children'], {includeOnlyClasses => ['WebGUI::Asset::Post::Thread']})};
+	return $self->getChildCount({
+            includeOnlyClasses => ['WebGUI::Asset::Post::Thread'],
+            statusToInclude => ['approved'],
+        });
 }
 
 #-------------------------------------------------------------------
@@ -61,26 +67,6 @@ sub _visitorCacheOk {
 	return ($self->session->user->isVisitor
 		&& !$self->session->form->process('sortBy'));
 }
-
-#-------------------------------------------------------------------
-
-=head2 addChild 
-
-Extend the base method to allow only Threads as children.
-
-=cut
-
-sub addChild {
-	my $self = shift;
-	my $properties = shift;
-	my @other = @_;
-	if ($properties->{className} ne "WebGUI::Asset::Post::Thread") {
-		$self->session->errorHandler->security("add a ".$properties->{className}." to a ".$self->get("className"));
-		return undef;
-	}
-	return $self->next::method($properties, @other);
-}
-
 
 #-------------------------------------------------------------------
 
@@ -130,7 +116,7 @@ sub appendPostListTemplateVars {
 			if ($self->get("displayLastReply")) {
 				my $lastPost = $post->getLastPost();
 				%lastReply = (
-					"lastReply.url"                 => $lastPost->getUrl.'#'.$lastPost->getId,
+					"lastReply.url"                 => $lastPost->getThreadLinkUrl,
                     "lastReply.title"               => $lastPost->get("title"),
                     "lastReply.user.isVisitor"      => $lastPost->get("ownerUserId") eq "1",
                     "lastReply.username"            => $lastPost->get("username"),
@@ -142,16 +128,10 @@ sub appendPostListTemplateVars {
 			}
 			$hasRead = $post->isMarkedRead;
 		}
-		my $url;
-		if ($post->get("status") eq "pending") {
-			$url = $post->getUrl("revision=".$post->get("revisionDate"))."#".$post->getId;
-		} else {
-			$url = $post->getUrl."#".$post->getId;
-		}
 		my %postVars = (
 			%{$post->get},
             "id"                    => $post->getId,
-            "url"                   => $url,
+            "url"                   => $post->getThreadLinkUrl,
 			rating_loop             => \@rating_loop,
 			"content"               => $post->formatContent,
             "status"                => $post->getStatus,
@@ -166,10 +146,10 @@ sub appendPostListTemplateVars {
             "user.isVisitor"        => $post->get("ownerUserId") eq "1",
         	"edit.url"              => $post->getEditUrl,
 			'controls'              => $controls,
-            "isSecond"              => (($i+1)%2==0),
-            "isThird"               => (($i+1)%3==0),
-            "isFourth"              => (($i+1)%4==0),
-            "isFifth"               => (($i+1)%5==0),
+            "isSecond"              => (($i+1) == 2),
+            "isThird"               => (($i+1) == 3),
+            "isFourth"              => (($i+1) == 4),
+            "isFifth"               => (($i+1) == 5),
 			"user.hasRead"          => $hasRead,
             "user.isPoster"         => $post->isPoster,
             "avatar.url"            => $post->getAvatarUrl,
@@ -419,25 +399,6 @@ sub canStartThread {
 
 #-------------------------------------------------------------------
 
-=head2 canView ( [ $userId ] )
-
-Extends the base method to also allow users who canPost to the CS.
-
-=head3 $userId
-
-A userId to check for edit permissions. If $userId is false, then it checks
-the current session user.
-
-=cut
-
-sub canView {
-	my $self = shift;
-        my $userId  = shift     || $self->session->user->userId;
-	return $self->next::method( $userId ) || $self->canPost( $userId );
-}
-
-#-------------------------------------------------------------------
-
 =head2 commit 
 
 Extend the base method to handle making a cron job for fetching mail for the CS.  The
@@ -457,19 +418,19 @@ sub commit {
     unless (defined $cron) {
             $cron = WebGUI::Workflow::Cron->create($self->session, {
                     title=>$self->getTitle." ".$i18n->get("mail"),
-                    minuteOfHour=>"*/".($self->get("getMailInterval")/60),
                     className=>(ref $self),
                     methodName=>"new",
                     parameters=>$self->getId,
-                    workflowId=>"csworkflow000000000001"
+                    workflowId=>"csworkflow000000000001",
+                    $self->getCronIntervals,
                     });
             $self->update({getMailCronId=>$cron->getId});
     }
-    if ($self->get("getMail")) {
-            $cron->set({enabled=>1,title=>$self->getTitle." ".$i18n->get("mail"), minuteOfHour=>"*/".($self->get("getMailInterval")/60)});
-    } else {
-            $cron->set({enabled=>0,title=>$self->getTitle." ".$i18n->get("mail"), minuteOfHour=>"*/".($self->get("getMailInterval")/60)});
-    }
+    $cron->set({
+        enabled => $self->get('getMail') ? 1 : 0,
+        title   => $self->getTitle." ".$i18n->get("mail"),
+        $self->getCronIntervals(),
+    });
 }
 
 #-------------------------------------------------------------------
@@ -526,6 +487,20 @@ sub definition {
 			  userDefined5=>$i18n->get('user defined 5'),
 			  ($useKarma? (karmaRank=>$i18n->get('karma rank')) : ()),
 			 );
+
+	tie my %mailIntervalOptions, 'Tie::IxHash';
+    %mailIntervalOptions = (
+         'every minute'       => $i18n->get('every minute'),
+         "every other minute" => $i18n->get('every other minute'),
+         'every 5 minutes'    => $i18n->get('every 5 minutes'),
+         'every 10 minutes'   => $i18n->get('every 10 minutes'),
+         'every 15 minutes'   => $i18n->get('every 15 minutes'),
+         'every 20 minutes'   => $i18n->get('every 20 minutes'),
+         'every 30 minutes'   => $i18n->get('every 30 minutes'),
+         'every hour'         => $i18n->get('every hour'),
+         'every other hour'   => $i18n->get('every other hour'),
+         'once per day'       => $i18n->get('once per day'),
+     );
 
 	my %properties;
 	tie %properties, 'Tie::IxHash';
@@ -595,6 +570,7 @@ sub definition {
 			tab=>'mail',
 			label=>$i18n->get("mail account"),
 			hoverHelp=>$i18n->get("mail account help"),
+            extras => 'autocomplete="off"',
 			},
 		mailPassword=>{
 			fieldType=>"password",
@@ -602,6 +578,7 @@ sub definition {
 			tab=>'mail',
 			label=>$i18n->get("mail password"),
 			hoverHelp=>$i18n->get("mail password help"),
+            extras => 'autocomplete="off"',
 			},
 		mailAddress=>{
 			fieldType=>"email",
@@ -630,8 +607,11 @@ sub definition {
 			hoverHelp=>$i18n->get("get mail help"),
 			},
 		getMailInterval=>{
-			fieldType=>"interval",
-			defaultValue=>300,
+			#fieldType=>"interval",
+			#defaultValue=>300,
+			fieldType=>"selectBox",
+            defaultValue => 'every 10 minutes',
+            options => \%mailIntervalOptions,
 			tab=>'mail',
 			label=>$i18n->get("get mail interval"),
 			hoverHelp=>$i18n->get("get mail interval help"),
@@ -921,6 +901,14 @@ sub definition {
             hoverHelp=>$i18n->get('post received template hoverHelp'),
             defaultValue=>'default_post_received1',
         },
+        unsubscribeTemplateId =>{
+            fieldType=>'template',
+            namespace=>'Collaboration/Unsubscribe',
+            tab=>'display',
+            label=>$i18n->get('unsubscribe template'),
+            hoverHelp=>$i18n->get('unsubscribe template hoverHelp'),
+            defaultValue=>'default_CS_unsubscribe',
+        },
         );
 
         push(@{$definition}, {
@@ -938,7 +926,8 @@ sub definition {
 
 =head2 duplicate 
 
-Extend the base method to handle making a subscription group for the new CS.
+Extend the base method to handle making a subscription group for the new CS, and
+to build a new Cron job.  It also recalculates the number of threads and replies.
 
 =cut
 
@@ -946,7 +935,114 @@ sub duplicate {
 	my $self = shift;
 	my $newAsset = $self->next::method(@_);
 	$newAsset->createSubscriptionGroup;
-	return $newAsset;
+    my $i18n = WebGUI::International->new($self->session, "Asset_Collaboration");
+    my $newCron = WebGUI::Workflow::Cron->create($self->session, {
+            title=>$self->getTitle." ".$i18n->get("mail"),
+            className=>(ref $self),
+            methodName=>"new",
+            parameters=>$self->getId,
+            workflowId=>"csworkflow000000000001",
+            $self->getCronIntervals(),
+    });
+    $newAsset->update({getMailCronId=>$newCron->getId});
+    $newAsset->incrementReplies('','');
+    return $newAsset;
+}
+
+#-------------------------------------------------------------------
+
+=head2 duplicateBranch.
+
+Extend the base method to recalculate the number of threads and replies.
+
+=cut
+
+sub duplicateBranch {
+    my $self = shift;
+    my $newAsset = $self->next::method(@_);
+    $newAsset->incrementReplies('','');
+    return $newAsset;
+}
+
+#-------------------------------------------------------------------
+
+=head2 getCronIntervals
+
+Translate the settings for getCsMailInterval into options for Spectre's Cron,
+minuteOfHour, hourOfDay and so on.
+
+Returns a hash of those options that can be folded into a hash of property settings for the
+Cron job.
+
+=cut
+
+sub getCronIntervals {
+	my $self     = shift;
+    my $interval = $self->get('getMailInterval');
+    ##My kingdom for a switch statement!
+    if ($interval eq 'every minute') {
+        return(
+            hourOfDay    => '*',
+            minuteOfHour => '*/1',
+        );
+    }
+    elsif ($interval eq 'every other minute') {
+        return(
+            hourOfDay    => '*',
+            minuteOfHour => '*/2',
+        );
+    }
+    elsif ($interval eq 'every 5 minutes') {
+        return(
+            hourOfDay    => '*',
+            minuteOfHour => '*/5',
+        );
+    }
+    elsif ($interval eq 'every 10 minutes') {
+        return(
+            hourOfDay    => '*',
+            minuteOfHour => '*/10',
+        );
+    }
+    elsif ($interval eq 'every 15 minutes') {
+        return(
+            hourOfDay    => '*',
+            minuteOfHour => '*/15',
+        );
+    }
+    elsif ($interval eq 'every 20 minutes') {
+        return(
+            hourOfDay    => '*',
+            minuteOfHour => '*/20',
+        );
+    }
+    elsif ($interval eq 'every 30 minutes') {
+        return(
+            hourOfDay    => '*',
+            minuteOfHour => '*/30',
+        );
+    }
+    elsif ($interval eq 'every hour') {
+        return(
+            hourOfDay    => '*',
+            minuteOfHour => '0',
+        );
+    }
+    elsif ($interval eq 'every other hour') {
+        return(
+            hourOfDay    => '*/2',
+            minuteOfHour => '0',
+        );
+    }
+    elsif ($interval eq 'once per day') {
+        return(
+            hourOfDay    => '7',
+            minuteOfHour => '0',
+        );
+    }
+	return(
+        minuteOfHour => '*/10',
+    );
 }
 
 #-------------------------------------------------------------------
@@ -1138,62 +1234,75 @@ Collaboration System
 =cut
 
 sub getThreadsPaginator {
-    my $self        = shift;
-	
-    my $scratchSortBy = $self->getId."_sortBy";
-	my $scratchSortOrder = $self->getId."_sortDir";
-	my $sortBy = $self->session->form->process("sortBy") || $self->session->scratch->get($scratchSortBy) || $self->get("sortBy");
-    my $sortOrder = $self->session->scratch->get($scratchSortOrder) || $self->get("sortOrder");
-	if ($sortBy ne $self->session->scratch->get($scratchSortBy) && $self->session->form->process("func") ne "editSave") {
-		$self->session->scratch->set($scratchSortBy,$self->session->form->process("sortBy"));
-        $self->session->scratch->set($scratchSortOrder, $sortOrder);
-	} elsif ($self->session->form->process("sortBy") && $self->session->form->process("func") ne "editSave") {
-                if ($sortOrder eq "asc") {
-                        $sortOrder = "desc";
-                } else {
-                        $sortOrder = "asc";
-                }
-                $self->session->scratch->set($scratchSortOrder, $sortOrder);
-	}
-	$sortBy ||= "assetData.revisionDate";
-	$sortOrder ||= "desc";
-    # Sort by the thread rating instead of the post rating.  other places don't care about threads.
-    if ($sortBy eq 'rating') {
-        $sortBy = 'threadRating';
-    } 
-    $sortBy = join('.', map { $self->session->db->dbh->quote_identifier($_) } split(/\./, $sortBy));
+    my $self    = shift;
+    my $session = $self->session;        
 
-	my $sql = "
-		select 
-			asset.assetId,
-			asset.className,
-			assetData.revisionDate as revisionDate 
-		from Thread 
-			left join asset on Thread.assetId=asset.assetId 
-			left join Post on Post.assetId=Thread.assetId and Thread.revisionDate = Post.revisionDate 
-			left join assetData on assetData.assetId=Thread.assetId and Thread.revisionDate = assetData.revisionDate 
-		where 
-			asset.parentId=".$self->session->db->quote($self->getId)." 
-			and asset.state='published' 
-			and asset.className='WebGUI::Asset::Post::Thread' 
-			and assetData.revisionDate=(
-				select
-					max(revisionDate) 
-				from 
-					assetData 
-				where 
-					assetData.assetId=asset.assetId 
-					and (status='approved' or status='archived')
-			) 
-			and status='approved'
-		group by 
-			assetData.assetId 
-		order by 
-			Thread.isSticky desc, 
-		".$sortBy." 
-			".$sortOrder;
-	my $p = WebGUI::Paginator->new($self->session,$self->getUrl,$self->get("threadsPerPage"));
-	$p->setDataByQuery($sql);
+    my $scratchSortBy    = $self->getId."_sortBy";
+    my $scratchSortOrder = $self->getId."_sortDir";
+    my $sortBy    = $self->session->form->process("sortBy")   
+                 || $self->session->scratch->get($scratchSortBy)
+                 || $self->get("sortBy");
+    $sortBy =~ s/^\w+\.//;
+    # Sort by the thread rating instead of the post rating.  other places don't care about threads.
+    $sortBy = $sortBy eq 'rating' ? 'threadRating' : $sortBy;
+    if (! WebGUI::Utility::isIn($sortBy, qw/userDefined1 userDefined2 userDefined3 userDefined4 userDefined5 title lineage revisionDate creationDate karmaRank threadRating views replies lastPostDate/)) {
+        $sortBy = 'revisionDate';
+    }
+    if ($sortBy eq 'assetId' || $sortBy eq 'revisionDate') {
+        $sortBy = 'assetData.' . $sortBy;
+    }
+    my $sortOrder = $self->session->form->process("sortOrder")
+                 || $self->session->scratch->get($scratchSortOrder)
+                 || $self->get("sortOrder");
+    #$sortOrder    = lc $sortOrder;
+    #$sortOrder    = 'desc' if ($sortOrder ne 'asc' && $sortOrder ne 'desc');
+    if ($sortBy ne $self->session->scratch->get($scratchSortBy) && $self->session->form->process("func") ne "editSave") {
+        $self->session->scratch->set($scratchSortBy,$self->session->form->process("sortBy"));
+        $self->session->scratch->set($scratchSortOrder, $sortOrder);
+    }
+    elsif ($self->session->form->process("sortBy") && $self->session->form->process("func") ne "editSave" && ! $self->session->form->process('sortOrder')) {
+        if ($sortOrder eq "asc") {
+            $sortOrder = "desc";
+        }
+        else {
+            $sortOrder = "asc";
+        }
+        $self->session->scratch->set($scratchSortOrder, $sortOrder);
+    }
+    $sortBy = join('.', map { $self->session->db->dbh->quote_identifier($_) } split(/\./, $sortBy));
+    $sortOrder ||= 'desc';
+
+    my $sql = "
+        select 
+            asset.assetId,
+            asset.className,
+            assetData.revisionDate as revisionDate 
+        from Thread 
+            left join asset on Thread.assetId=asset.assetId 
+            left join Post on Post.assetId=Thread.assetId and Thread.revisionDate = Post.revisionDate 
+            left join assetData on assetData.assetId=Thread.assetId and Thread.revisionDate = assetData.revisionDate 
+        where 
+            asset.parentId=".$self->session->db->quote($self->getId)." 
+            and asset.state='published' 
+            and asset.className='WebGUI::Asset::Post::Thread' 
+            and assetData.revisionDate=(
+                select
+                    max(revisionDate) 
+                from 
+                    assetData 
+                where 
+                    assetData.assetId=asset.assetId 
+                    and (status='approved' or status='archived')
+            ) 
+            and status='approved'
+        group by 
+            assetData.assetId 
+        order by 
+            Thread.isSticky desc, 
+        ".$sortBy."
+        ".$sortOrder;
+    my $p     = WebGUI::Paginator->new($self->session,$self->getUrl,$self->get("threadsPerPage"));
+    $p->setDataByQuery($sql);
 
     return $p;
 }
@@ -1365,11 +1474,19 @@ sub processPropertiesFromFormPost {
 		$self->createSubscriptionGroup;
 	}
         if ($updatePrivs) {
-                foreach my $descendant (@{$self->getLineage(["descendants"],{returnObjects=>1})}) {
-                        $descendant->update({
-                                groupIdView=>$self->get("groupIdView"),
-                                groupIdEdit=>$self->get("groupIdEdit")
-                                });
+                my $descendantIter = $self->getLineageIterator(['descendants']);
+                while ( 1 ) {
+                    my $descendant;
+                    eval { $descendant = $descendantIter->() };
+                    if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+                        $self->session->log->error($x->full_message);
+                        next;
+                    }
+                    last unless $descendant;
+                    $descendant->update({
+                            groupIdView=>$self->get("groupIdView"),
+                            groupIdEdit=>$self->get("groupIdEdit")
+                            });
                 }
         }
 	$self->session->scratch->delete($self->getId."_sortBy");
@@ -1528,18 +1645,47 @@ sub subscribe {
 
 #-------------------------------------------------------------------
 
-=head2 unsubscribe (  )
+=head2 unsubscribe ( [$user] )
 
 Unsubscribes a user from this collaboration system
+
+=head3 $user
+
+An optional user object to unsubscribe.  If the object isn't passed, then it uses the session user.
 
 =cut
 
 sub unsubscribe {
-	my $self = shift;
-	my $group = WebGUI::Group->new($self->session,$self->get("subscriptionGroupId"));
-	return
-        unless $group;
-    $group->deleteUsers([$self->session->user->userId],[$self->get("subscriptionGroupId")]);
+    my $self  = shift;
+    my $user  = shift || $self->session->user;
+    my $group = WebGUI::Group->new($self->session,$self->get("subscriptionGroupId"));
+    return unless $group;
+    $group->deleteUsers([$user->userId]);
+}
+
+
+#-------------------------------------------------------------------
+
+=head2 update ( )
+
+Update the base method to handle checking valid users in the subscription group if
+view permissions have changed.
+
+=cut
+
+sub update {
+    my $self  = shift;
+    my $origGroupIdView = $self->get('groupIdView');
+    $self->next::method(@_);
+    return if $self->get('groupIdView') eq $origGroupIdView;
+    my $instance_data = {
+        workflowId => 'xR-_GRRbjBojgLsFx3dEMA',
+        className  => 'WebGUI::Asset',
+        methodName => 'newPending',
+        parameters => $self->getId,
+    };
+    my $instance = WebGUI::Workflow::Instance->create($self->session, $instance_data);
+    $instance->start('skipRealtime');
 }
 
 
@@ -1572,6 +1718,23 @@ sub view {
 
 #-------------------------------------------------------------------
 
+=head2 www_edit 
+
+Override the master class to add an "Unarchive All" link.
+
+=cut
+
+sub www_edit {
+    my $self = shift;
+    return $self->session->privilege->insufficient() unless $self->canEdit;
+    return $self->session->privilege->locked() unless $self->canEditIfLocked;
+    my $i18n = WebGUI::International->new($self->session, 'Asset_Collaboration');
+    $self->getAdminConsole->addConfirmedSubmenuItem($self->getUrl('func=unarchiveAll'),$i18n->get("unarchive all"),$i18n->get("unarchive confirm"));
+    return $self->getAdminConsole->render($self->getEditForm->print,$self->getName);
+}
+
+#-------------------------------------------------------------------
+
 =head2 www_search ( )
 
 The web method to display and use the forum search interface.
@@ -1586,7 +1749,8 @@ sub www_search {
 	
     my $query   = $self->session->form->process("query","text");
     $var->{'form.header'} = WebGUI::Form::formHeader($self->session,{
-        action=>$self->getUrl("func=search;doit=1")
+        action=> $self->getUrl("func=search;doit=1"),
+        method=> 'GET',
     });
     $var->{'query.form'}  = WebGUI::Form::text($self->session,{
         name  => 'query',
@@ -1627,22 +1791,96 @@ sub www_subscribe {
         return $self->www_view;
 }
 
+#----------------------------------------------------------------------------
+
+=head2 www_unarchiveAll ( )
+
+Unarchive all the threads in this collaboration system
+
+=cut
+
+sub www_unarchiveAll {
+    my ( $self ) = @_;
+    my $session     = $self->session;
+    return $session->privilege->insufficient() unless $self->canEdit;
+    my $pb      = WebGUI::ProgressBar->new($session);
+    my $i18n     = WebGUI::International->new($session, 'Asset_Collaboration');
+    $pb->start($i18n->get('unarchive all'), $self->getUrl('func=edit'));
+    my $threadIter = $self->getLineageIterator(['children'],{
+        includeOnlyClasses      => [ 'WebGUI::Asset::Post::Thread' ],
+        statusToInclude         => [ 'archived' ],
+    } );
+    ASSET: while ( 1 ) {
+        my $thread;
+        eval { $thread = $threadIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $session->log->error($x->full_message);
+            next;
+        }
+        last unless $thread;
+        if ($thread->canEdit) {
+            $thread->unarchive;
+        }
+    }
+    return $pb->finish( $self->getUrl('func=edit') );
+}
+
 #-------------------------------------------------------------------
 
-=head2 www_unsubscribe (  )
+=head2 www_unsubscribe ( [$message] )
 
 The web method to unsubscribe from a collaboration.
+
+=head3 $message
+
+An error message to display to the user.
 
 =cut
 
 sub www_unsubscribe {
-    my $self = shift;
+    my $self    = shift;
+    my $message = shift;
     if($self->canSubscribe){
         $self->unsubscribe;
         return $self->www_view;
-    }else{
-        return $self->session->privilege->noAccess;
+    }
+    else {
+        my $session = $self->session;
+        my $i18n    = WebGUI::International->new($session, 'Asset_Collaboration');
+        my $var     = $self->get();
+        $var->{title}       = $self->getTitle;
+        $var->{url}         = $self->getUrl;
+        $var->{formHeader}  = WebGUI::Form::formHeader($session)
+                            . WebGUI::Form::hidden($session, { name => 'func', value => 'unsubscribeConfirm', }, ),
+        $var->{formFooter}  = WebGUI::Form::formFooter($session),
+        $var->{formSubmit}  = WebGUI::Form::submit($session, { value => $i18n->get('unsubscribe'), }),
+        $var->{formEmail}   = WebGUI::Form::email($session, { name => 'userEmail', value => $session->form->process('userEmail'), }),
+        $var->{formMessage} = $message;
+        return $self->processStyle($self->processTemplate($var, $self->get("unsubscribeTemplateId")));
     } 
+}
+
+#-------------------------------------------------------------------
+
+=head2 www_unsubscribeConfirm (  )
+
+Process the unsubscribe form.
+
+=cut
+
+sub www_unsubscribeConfirm {
+    my $self    = shift;
+    my $session = $self->session;
+    return $self->www_view unless $session->form->validToken;
+    my $email   = $session->form->process('userEmail', 'email');
+    return $self->www_view unless $email;
+    my $user = WebGUI::User->newByEmail($session, $email);
+    my $i18n = WebGUI::International->new($session, 'Asset_Collaboration');
+    if (! $user) {
+        return $self->www_unsubscribe($i18n->get('no user email error message'));
+    }
+    $self->unsubscribe($user);
+    return $self->www_unsubscribe($i18n->get('You have been unsubscribed'));
 }
 
 #-------------------------------------------------------------------

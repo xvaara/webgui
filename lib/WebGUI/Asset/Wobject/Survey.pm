@@ -27,11 +27,6 @@ use Params::Validate qw(:all);
 use WebGUI::Macro;
 Params::Validate::validation_options( on_fail => sub { WebGUI::Error::InvalidParam->throw( error => shift ) } );
 
-my $TAP_PARSER_MISSING = <<END_WARN;
-The Survey Test Suite feature requires TAP::Parser and TAP::Parser::Aggregator CPAN modules. 
-These will be installed as a dependency if you upgrade to Test::Harness 3.x
-END_WARN
-
 #-------------------------------------------------------------------
 
 =head2 definition ( session, [definition] )
@@ -59,6 +54,13 @@ sub definition {
             tab          => 'properties',
             label        => $i18n->get('Survey Exit URL'),
             hoverHelp    => $i18n->get('Survey Exit URL help'),
+        },
+        maxResponsesPerUser => {
+            fieldType    => 'integer',
+            tab          => 'properties',
+            defaultValue => 1,
+            label        => $i18n->get('Max user responses'),
+            hoverHelp    => $i18n->get('Max user responses help'),
         },
         timeLimit => {
             fieldType    => 'integer',
@@ -235,13 +237,6 @@ sub definition {
             defaultValue => 4,
             label        => $i18n->get('Group to view reports'),
             hoverHelp    => $i18n->get('Group to view reports help'),
-        },
-        maxResponsesPerUser => {
-            fieldType    => 'integer',
-            tab          => 'security',
-            defaultValue => 1,
-            label        => $i18n->get('Max user responses'),
-            hoverHelp    => $i18n->get('Max user responses help'),
         },
         
         # Other
@@ -692,15 +687,18 @@ test suite.
 
 sub getAdminConsole {
     my $self = shift;
-    my $ac = WebGUI::AdminConsole->new( $self->session, 'Survey' );
-    my $i18n = WebGUI::International->new($self->session, "Asset_Survey");
-    $ac->addSubmenuItem($self->session->url->page("func=edit"), WebGUI::International->new($self->session, "WebGUI")->get(575));
-    $ac->addSubmenuItem($self->session->url->page("func=editSurvey"), $i18n->get('edit survey'));
-    $ac->addSubmenuItem($self->session->url->page("func=takeSurvey"), $i18n->get('take survey'));
-    $ac->addSubmenuItem($self->session->url->page("func=graph"), $i18n->get('visualize'));
-    $ac->addSubmenuItem($self->session->url->page("func=editTestSuite"), $i18n->get("test suite"));
-    $ac->addSubmenuItem($self->session->url->page("func=runTests"), $i18n->get("run all tests"));
-    $ac->addSubmenuItem($self->session->url->page("func=runTests;format=tap"), $i18n->get("run all tests") . " (TAP)");
+    my $ac = $self->SUPER::getAdminConsole;
+    unless ($self->{_modifiedAdminConsole}) {
+        my $i18n = WebGUI::International->new($self->session, "Asset_Survey");
+        $ac->addSubmenuItem($self->session->url->page("func=edit"), WebGUI::International->new($self->session, "WebGUI")->get(575));
+        $ac->addSubmenuItem($self->session->url->page("func=editSurvey"), $i18n->get('edit survey'));
+        $ac->addSubmenuItem($self->session->url->page("func=takeSurvey"), $i18n->get('take survey'));
+        $ac->addSubmenuItem($self->session->url->page("func=graph"), $i18n->get('visualize'));
+        $ac->addSubmenuItem($self->session->url->page("func=editTestSuite"), $i18n->get("test suite"));
+        $ac->addSubmenuItem($self->session->url->page("func=runTests"), $i18n->get("run all tests"));
+        $ac->addSubmenuItem($self->session->url->page("func=runTests;format=tap"), $i18n->get("run all tests") . " (TAP)");
+        $self->{_modifiedAdminConsole} = 1;
+    }
     return $ac;
 }
 
@@ -1401,7 +1399,7 @@ sub view {
     my $responseDetails = $self->getResponseDetails || {};
 
     # Add lastResponse template vars
-    for my $tv qw(endDate complete restart timeout timeoutRestart) {
+    for my $tv ( qw(endDate complete restart timeout timeoutRestart) ) {
         $var->{"lastResponse\u$tv"} = $responseDetails->{$tv};
     }
     $var->{lastResponseFeedback} = $responseDetails->{templateText};
@@ -2002,6 +2000,7 @@ sub prepareShowSurveyTemplate {
     $section->{allowBackBtn} = $self->get('allowBackBtn');
 
     my $out = $self->processTemplate( $section, $self->get('surveyQuestionsId') );
+    WebGUI::Macro::process($self->session, \$out);
 
     $self->session->http->setMimeType('application/json');
     return to_json( { type => 'displayquestions', section => $section, questions => $questions, html => $out } );
@@ -2186,7 +2185,7 @@ sub takenCount {
     my $sql = 'select count(*) from Survey_response where';
     $sql .= ' assetId = ' . $self->session->db->quote($self->getId);
     $sql .= ' and isComplete = ' . $self->session->db->quote($isComplete);
-    for my $o qw(userId ipAddress) {
+    for my $o ( qw(userId ipAddress) ) {
         if (my $o_value = $opts{$o}) {
             $sql .= " and $o = " . $self->session->db->quote($o_value);
         }
@@ -2296,6 +2295,9 @@ END_SQL
     }
     $var->{response_loop} = \@responseloop;
     $paginator->appendTemplateVars($var);
+    
+    # Clean up
+    $self->clearTempReportTable;
 
     my $out = $self->processTemplate( $var, $self->get('gradebookTemplateId') );
     return $self->processStyle($out);
@@ -2361,12 +2363,12 @@ sub www_viewStatisticalOverview {
             }
         }
         else{
-            my $responses = $db->read('select value,answerComment from Survey_tempReport'
+            my $responses = $db->read('select answerValue,answerComment from Survey_tempReport'
                 . ' where sectionNumber=? and questionNumber=?',
                 [$sectionIndex,$questionIndex]);
             while (my $response = $responses->hashRef) {
                 push @answerloop,{
-                    'answer_value'      =>$response->{value},
+                    'answer_value'      =>$response->{answerValue},
                     'answer_comment'    =>$response->{answerComment}
                     };
             }
@@ -2386,6 +2388,9 @@ sub www_viewStatisticalOverview {
 
     $var->{question_loop} = \@questionloop;
     $paginator->appendTemplateVars($var);
+    
+    # Clean up
+    $self->clearTempReportTable;
 
     my $out = $self->processTemplate( $var, $self->get('overviewTemplateId') );
     return $self->processStyle($out);
@@ -2441,9 +2446,59 @@ sub export {
         $content = $self->session->db->$method( $opts{sql}, $opts{sqlParams} );
     }
     
+    # Clean up
+    $self->clearTempReportTable;
+    
     my $filename = $self->session->url->escape( $self->get("title") . "_$opts{name}.$format" );
     $self->session->http->setFilename($filename,"text/$format");
     return $content;
+}
+
+#-------------------------------------------------------------------
+
+=head2 exportAssetData ()
+
+Extend the base method to include custom question types added to this Survey.
+
+=cut
+
+sub exportAssetData {
+    my $self = shift;
+    my $asset_data = $self->SUPER::exportAssetData();
+    my $questions  = $self->surveyJSON->questions();
+    my $multiple_choice = $self->surveyJSON->multipleChoiceTypes();
+    my %question_types  = ();
+    my $get_question    = $self->session->db->prepare('select answers from Survey_questionTypes where questionType=?');
+    foreach my $question (@{ $questions }) {
+        my $type = $question->{questionType};
+        next unless $multiple_choice->{$type};
+        next if $question_types{$type};
+        $get_question->execute([$type]);
+        my ($answers) = $get_question->array();
+        $question_types{$type} = $answers;
+    }
+    #my $question_types = $self->db->buildArrayRefOfHashRefs('select * from Survey_questionTypes');
+    $get_question->finish;
+    $asset_data->{question_types} = \%question_types;
+    return $asset_data;
+}
+
+#-------------------------------------------------------------------
+
+=head2 importAssetCollateralData ($data)
+
+Extend the base method to include custom question types added to this Survey.
+
+=cut
+
+sub importAssetCollateralData {
+    my $self = shift;
+    my $data = shift;
+    $self->SUPER::importAssetCollateralData($data);
+    my $custom_types = $data->{question_types};
+    while (my ($question, $answer) = each %{ $custom_types }) {
+        $self->session->db->write("INSERT INTO Survey_questionTypes VALUES(?,?) ON DUPLICATE KEY UPDATE answers = ?",[$question,$answer,$answer]);
+    }
 }
 
 #-------------------------------------------------------------------
@@ -2581,6 +2636,21 @@ END_HTML
 
 #-------------------------------------------------------------------
 
+=head2 clearTempReportTable
+
+Clears the Survey_tempReport table
+
+Typically called after L<loadTempReportTable> has been used
+
+=cut
+
+sub clearTempReportTable {
+    my $self = shift;
+    $self->session->db->write( 'delete from Survey_tempReport where assetId = ?', [ $self->getId() ] );
+}
+
+#-------------------------------------------------------------------
+
 =head2 loadTempReportTable
 
 Loads the responses from the survey into the Survey_tempReport table, so that other or custom reports can be ran against this data.
@@ -2603,7 +2673,7 @@ sub loadTempReportTable {
     my %opts = validate(@_, { ignoreRevisionDate => 0 });
 
     # Remove old temp report data
-    $self->session->db->write( 'delete from Survey_tempReport where assetId = ?', [ $self->getId() ] );
+    $self->clearTempReportTable;
     
     # Build the sql that will select all responses
     my $sql = 'select * from Survey_response where assetId = ?';
@@ -2919,11 +2989,7 @@ sub www_runTest {
     my $i18n = WebGUI::International->new($session, 'Asset_Survey');
     my $ac = $self->getAdminConsole;
     
-    eval { require TAP::Parser };
-    if ($@) {
-        $self->session->log->warn($TAP_PARSER_MISSING);
-        return $ac->render($TAP_PARSER_MISSING, $i18n->get('test results'));
-    }
+    require TAP::Parser;
     
     my $testId = $session->form->get("testId");
     
@@ -2955,11 +3021,7 @@ all interesting TAP::Parser and TAP::Parser::Result properties) and the template
 sub parseTap {
     my ($self, $tap) = @_;
     
-    eval { require TAP::Parser };
-    if ($@) {
-        $self->session->log->warn($TAP_PARSER_MISSING);
-        return;
-    }
+    require TAP::Parser;
     my $parser = TAP::Parser->new( { tap => $tap } );
     
     # Expose TAP::Parser and TAP::Parser::Result info as template variables
@@ -3054,16 +3116,8 @@ sub www_runTests {
 
     
     my @parsers;
-    eval { require TAP::Parser };
-    if ($@) {
-        $self->session->log->warn($TAP_PARSER_MISSING);
-        return $ac->render($TAP_PARSER_MISSING, $i18n->get('test results'));
-    }
-    eval { require TAP::Parser::Aggregator };
-    if ($@) {
-        $self->session->log->warn($TAP_PARSER_MISSING);
-        return $ac->render($TAP_PARSER_MISSING, $i18n->get('test results'));
-    }
+    require TAP::Parser;
+    require TAP::Parser::Aggregator;
     my $aggregate = TAP::Parser::Aggregator->new;
     $aggregate->start;
     

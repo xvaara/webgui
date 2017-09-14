@@ -68,6 +68,10 @@ Any extra name=value pairs needed to save the data successfully
 If true, will enable the table for editing. This is only necessary when 
 displaying the table with getValueAsHtml().
 
+=head4 dateFormat
+
+A strftime string describing the proper date format
+
 =cut
 
 sub definition {
@@ -81,6 +85,7 @@ sub definition {
         ajaxSaveUrl    => { defaultValue => undef, },
         ajaxSaveFunc   => { defaultValue => "view", },
         ajaxSaveExtras => { defaultValue => undef, },
+        dateFormat     => { defaultValue => '%y-%m-%d', },
         };
 
     return $class->SUPER::definition( $session, $definition );
@@ -107,7 +112,7 @@ sub getDataTableHtml {
 
     ### Prepare the columns data
     my %parsers = (
-        date   => "YAHOO.util.DataSource.parseDate",
+        date   => "YAHOO.lang.JSON.stringToDate",
         number => "YAHOO.util.DataSource.parseNumber",
     );
 
@@ -115,6 +120,8 @@ sub getDataTableHtml {
         date    => "date",
         textbox => "textbox",
     );
+
+    my $dateFormat  = $self->get('dateFormat') || '%y-%m-%d';
 
     my @columnsJson = ();
     for my $column ( @{ $data->{columns} } ) {
@@ -125,6 +132,7 @@ sub getDataTableHtml {
             . qq["key" : "$column->{ key }", ]
             . qq["abbr" : "$column->{ key }", ]
             . qq["formatter" : "$column->{ formatter }", ]
+            . ( $column->{formatter} eq "Date" ? qq["dateOptions" : { "format" : "$dateFormat" },] : "" )
             . qq["resizable" : 1, ]
             . qq["sortable" : 1];
 
@@ -155,6 +163,7 @@ sub getDataTableHtml {
         "ajaxDataFunc" => $self->get('ajaxDataFunc'),
         "ajaxSaveUrl"  => $self->get('ajaxSaveUrl'),
         "ajaxSaveFunc" => $self->get('ajaxSaveFunc'),
+        "dateFormat"   => $dateFormat,
     };
     my $optionsJson = JSON->new->encode($options);
 
@@ -336,6 +345,19 @@ sub getTableHtml {
 
 #-------------------------------------------------------------------
 
+=head2 headTags ()
+
+Set head tags for this form plugin
+
+=cut
+
+sub headTags {
+    my $self = shift;
+    $self->prepare;
+}
+
+#-------------------------------------------------------------------
+
 =head2 prepare ( )
 
 Load all the script and css files we need. Call this in prepareView() if needed.
@@ -369,6 +391,8 @@ sub prepare {
             )
         );
         $style->setLink( $url->extras('yui/build/container/assets/skins/sam/container.css'),
+            { rel => "stylesheet", type => "text/css" } );
+        $style->setLink( $url->extras( 'yui-webgui/build/form/datatable.css'),
             { rel => "stylesheet", type => "text/css" } );
         $style->setScript( $url->extras('yui/build/container/container-min.js') );
         $style->setScript( $url->extras('yui/build/button/button-min.js') );

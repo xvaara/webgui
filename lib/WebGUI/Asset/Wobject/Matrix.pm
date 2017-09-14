@@ -315,11 +315,17 @@ sub deleteAttribute {
         [$attributeId,$self->getId]);
 
     # recalculate scores for MatrixListings
-    my @listings = @{ $self->getLineage(['descendants'], {
+    my $listingIter = $self->getLineageIterator(['descendants'], {
             includeOnlyClasses  => ['WebGUI::Asset::MatrixListing'],
-            returnObjects       => 1,
-        }) };
-    foreach my $listing (@listings){
+        });
+    while ( 1 ) {
+        my $listing;
+        eval { $listing = $listingIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $self->session->log->error($x->full_message);
+            next;
+        }
+        last unless $listing;
         $listing->updateScore;
     }
 
@@ -631,20 +637,14 @@ sub view {
     $style->setLink($url->extras('yui/build/datatable/assets/skins/sam/datatable.css'), 
         {type =>'text/css', rel=>'stylesheet'});
 
-    $style->setScript($url->extras('yui/build/utilities/utilities.js'),
-        {type => 'text/javascript'});
-    $style->setScript($url->extras('yui/build/json/json-min.js'),
-        {type => 'text/javascript'});
-    $style->setScript($url->extras('yui/build/datasource/datasource-min.js'),
-        {type => 'text/javascript'});
-    $style->setScript($url->extras('yui/build/datatable/datatable-min.js'),
-        {type => 'text/javascript'});
-    $style->setScript($url->extras('yui/build/button/button-min.js'),
-        {type => 'text/javascript'});
+    $style->setScript($url->extras('yui/build/utilities/utilities.js'),       {type => 'text/javascript'});
+    $style->setScript($url->extras('yui/build/json/json-min.js'),             {type => 'text/javascript'});
+    $style->setScript($url->extras('yui/build/datasource/datasource-min.js'), {type => 'text/javascript'});
+    $style->setScript($url->extras('yui/build/datatable/datatable-min.js'),   {type => 'text/javascript'});
+    $style->setScript($url->extras('yui/build/button/button-min.js'),         {type => 'text/javascript'});
     
     my ($varStatistics,$varStatisticsEncoded);
 	my $var = $self->get;
-    $var->{listing_loop}            = $self->getListings;
     $var->{isLoggedIn}              = ($session->user->userId ne "1");
     $var->{addMatrixListing_url}    = $self->getUrl('func=add;class=WebGUI::Asset::MatrixListing'); 
     $var->{exportAttributes_url}    = $self->getUrl('func=exportAttributes');
@@ -667,17 +667,23 @@ sub view {
    
     if ($self->canEdit){
         # Get all the MatrixListings that are still pending.
-        my @pendingListings = @{ $self->getLineage(['descendants'], {
+        my $pendingIter = $self->getLineageIterator(['descendants'], {
                 includeOnlyClasses  => ['WebGUI::Asset::MatrixListing'],
                 orderByClause       => "revisionDate asc",
-                returnObjects       => 1,
                 statusToInclude     => ['pending'],
-            }) };
-        foreach my $pendingListing (@pendingListings){
+            });
+        while ( 1 ) {
+            my $pending;
+            eval { $pending = $pendingIter->() };
+            if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+                $session->log->error($x->full_message);
+                next;
+            }
+            last unless $pending;
             push (@{ $var->{pending_loop} }, {
-                            url     => $pendingListing->getUrl
-                                       ."?func=view;revision=".$pendingListing->get('revisionDate'),
-                            name    => $pendingListing->get('title'),
+                            url     => $pending->getUrl
+                                       ."?func=view;revision=".$pending->get('revisionDate'),
+                            name    => $pending->get('title'),
                         });
         }
     } 
@@ -753,18 +759,23 @@ sub view {
 
         # Get the 5 MatrixListings that were last updated as objects using getLineage.
 
-        my @lastUpdatedListings = @{ $self->getLineage(['descendants'], {
+        my $lastUpdatedIter = $self->getLineageIterator(['descendants'], {
             includeOnlyClasses  => ['WebGUI::Asset::MatrixListing'],
             joinClass           => "WebGUI::Asset::MatrixListing",
             orderByClause       => "lastUpdated desc",
-            limit               => 5,
-            returnObjects       => 1,
-        }) };
-        foreach my $lastUpdatedListing (@lastUpdatedListings){
+        });
+        for ( 1..5 ) {
+            my $lastUpdated;
+            eval { $lastUpdated = $lastUpdatedIter->() };
+            if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+                $session->log->error($x->full_message);
+                next;
+            }
+            last unless $lastUpdated;
             push (@{ $varStatistics->{last_updated_loop} }, {
-                        url         => $lastUpdatedListing->getUrl,
-                        name        => $lastUpdatedListing->get('title'),
-                        lastUpdated => $self->session->datetime->epochToHuman($lastUpdatedListing->get('lastUpdated'),"%z")
+                        url         => $lastUpdated->getUrl,
+                        name        => $lastUpdated->get('title'),
+                        lastUpdated => $session->datetime->epochToHuman($lastUpdated->get('lastUpdated'),"%z")
                     });
         }
         $varStatistics->{lastUpdated_sortButton}  = "<span id='sortByUpdated'><button type='button'>"
@@ -792,6 +803,7 @@ sub view {
             rating.category =? 
             and asset.parentId=? 
             and asset.state='published' 
+            and rating.countValue >= 10
             and assetData.revisionDate=(
                 select
                     max(revisionDate)
@@ -807,21 +819,21 @@ sub view {
         
         $data = $db->quickHashRef($sql." desc limit 1",[$category,$self->getId]);
         push(@{ $varStatistics->{best_rating_loop} },{
-            url=>'/'.$data->{url},
-            category=>$category,
-            name=>$data->{productName},
-            mean=>$data->{meanValue},
-            median=>$data->{medianValue},
-            count=>$data->{countValue}
+            url      => $session->url->gateway($data->{url}),
+            category => $category,
+            name     => $data->{productName},
+            mean     => 0+$data->{meanValue},
+            median   => 0+$data->{medianValue},
+            count    => 0+$data->{countValue}
             });
         $data = $db->quickHashRef($sql." asc limit 1",[$category,$self->getId]);
         push(@{ $varStatistics->{worst_rating_loop} },{
-            url=>'/'.$data->{url},
-            category=>$category,
-            name=>$data->{productName},
-            mean=>$data->{meanValue},
-            median=>$data->{medianValue},
-            count=>$data->{countValue}
+            url      => $session->url->gateway($data->{url}),
+            category => $category,
+            name     => $data->{productName},
+            mean     => 0+$data->{meanValue},
+            median   => 0+$data->{medianValue},
+            count    => 0+$data->{countValue}
             });
         }
 
@@ -1164,7 +1176,6 @@ sub www_getCompareFormData {
                 $parameter->{value} = $form->process($param);
                 my $attributeId = $param;
                 $attributeId =~ s/^search_//;
-                $attributeId =~ s/_____/-/g;
                 $parameter->{attributeId} = $attributeId;
                 push(@searchParamList,  $db->quote($parameter->{attributeId}) );
                 push(@searchParams,     $parameter);
@@ -1193,42 +1204,40 @@ sub www_getCompareFormData {
     if($form->process("search")) {
         if ($searchParamList) {
             RESULT: foreach my $result (@{$self->getListings}) {
+                my $checked = '';
                 my $matrixListing_attributes = $session->db->buildHashRefOfHashRefs("
                             select value, fieldType, attributeId from Matrix_attribute
                             left join MatrixListing_attribute as listing using(attributeId)
                             where listing.matrixListingId = ? 
                             and attributeId IN(".$searchParamList.")",
                             [$result->{assetId}],'attributeId');
+                ##Searching is AND based.
                 PARAM: foreach my $param (@searchParams_sorted) {
                         my $fieldType       = $matrixListing_attributes->{$param->{attributeId}}->{fieldType};
                         my $listingValue    = $matrixListing_attributes->{$param->{attributeId}}->{value};
                         if(($fieldType eq 'MatrixCompare') && ($listingValue < $param->{value})){
-                            $result->{checked} = '';
+                            $checked = '';
                             last PARAM;
                         }
                         elsif(($fieldType ne 'MatrixCompare' && $fieldType ne '') && ($param->{value} ne $listingValue)){
-                            $result->{checked} = '';
+                            $checked = '';
                             last PARAM;
                         }
                         else{
-                            $result->{checked} = 'checked';
+                            $checked = 'checked';
                         }
                 }
-                $result->{assetId}  =~ s/-/_____/g;
-                push @results, $result if $result->{checked} eq 'checked';
+                push @results, $result if $checked eq 'checked';
             }
         }
         else {   
             foreach my $result (@{$self->getListings}) {
-                $result->{checked} = 'checked';
-                $result->{assetId}  =~ s/-/_____/g;
                 push @results, $result;
             }
         }
     }
     else {
         foreach my $result (@{$self->getListings}) {
-            $result->{assetId}  =~ s/-/_____/g;
             if(WebGUI::Utility::isIn($result->{assetId},@listingIds)){
                 $result->{checked} = 'checked';
             }
@@ -1273,7 +1282,6 @@ sub www_getCompareListData {
     my @responseFields = ("attributeId", "name", "description","fieldType", "checked");
     
     foreach my $listingId (@listingIds){
-        $listingId =~ s/_____/-/g;
         my $listing = WebGUI::Asset::MatrixListing->new($session,$listingId);
         $listing->incrementCounter("compares");
         my $listingId_safe = $listingId;
@@ -1390,7 +1398,7 @@ sub www_listAttributes {
 
 =head2 www_search  (  )
 
-Returns the search screen.
+Returns the search screen.  Uses www_getCompareFormData with search=1 for doing AJAX requests.
 
 =cut
 

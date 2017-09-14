@@ -76,6 +76,45 @@ These methods are available from this class:
 
 #-------------------------------------------------------------------
 
+=head2 changeWorkflow ( $workflowId, $instance, $skipDelete )
+
+Kicks a new workflow in a new instance with the same object the current
+instance has, deleting the old instance unless you say otherwise.
+
+=cut
+
+sub changeWorkflow {
+    my ($self, $workflowId, $instance, $skipDelete) = @_;
+    WebGUI::Workflow::Instance->create(
+        $self->session, {
+            workflowId  => $workflowId,
+            methodName  => $instance->get('methodName'),
+            className   => $instance->get('className'),
+            parameters  => $instance->get('parameters'),
+            priority    => $instance->get('priority'),
+        }
+    )->start(1);
+    $instance->delete() unless $skipDelete;
+}
+
+#-------------------------------------------------------------------
+
+=head2 cleanup ( )
+
+Override this activity to add a cleanup routine to be run if an instance
+is deleted with this activity currently in a waiting state.  This is a stub
+and will do nothing unless overridden.
+
+=cut
+
+sub cleanup {
+	my $self     = shift;
+	my $instance = shift;
+	return 1;
+}
+
+#-------------------------------------------------------------------
+
 =head2 create ( session, workflowId [, id, classname  ] )
 
 Creates a new instance of this activity in a workflow.
@@ -315,7 +354,7 @@ sub new {
 	my %data = (%{$main}, %{$sub});
     for my $definition (reverse @{$class->definition($session)}) {
         for my $property (keys %{$definition->{properties}}) {
-            if(!defined $data{$property} || $data{$property} eq '' && $definition->{properties}{$property}{defaultValue}) {
+            if(!defined $data{$property}) {
                 $data{$property} = $definition->{properties}{$property}{defaultValue};
             }
         }

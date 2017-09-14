@@ -17,6 +17,7 @@ package WebGUI::Workflow::Activity::RequestApprovalForVersionTag;
 
 use strict;
 use base 'WebGUI::Workflow::Activity';
+use WebGUI::Asset;
 use WebGUI::VersionTag;
 use WebGUI::Inbox;
 use WebGUI::International;
@@ -40,6 +41,23 @@ See WebGUI::Workflow::Activity for details on how to use any activity.
 These methods are available from this class:
 
 =cut
+
+#-------------------------------------------------------------------
+
+=head2 cleanup ( )
+
+Override this activity to add a cleanup routine to be run if an instance
+is deleted with this activity currently in a waiting state.  This is a stub
+and will do nothing unless overridden.
+
+=cut
+
+sub cleanup {
+	my $self     = shift;
+	my $instance = shift;
+    $self->setMessageCompleted($instance);
+	return 1;
+}
 
 #-------------------------------------------------------------------
 
@@ -86,6 +104,13 @@ sub definition {
                 hoverHelp       => $i18n->get("do on approve help"),
                 none            => 1,
                 noneLabel       => $i18n->get('continue with workflow'),
+            },
+			templateId => {
+				fieldType    =>"template",
+				defaultValue => "lYhMheuuLROK_iNjaQuPKg",
+                namespace    => 'NotifyAboutVersionTag',
+				label        => $i18n->get("email template", 'Workflow_Activity_NotifyAboutVersionTag'),
+				hoverHelp    => $i18n->get("email template help", 'Workflow_Activity_NotifyAboutVersionTag')
             },
         },
     };
@@ -174,7 +199,6 @@ sub execute {
     my $versionTag  = shift;
     my $instance    = shift;
     my $i18n        = WebGUI::International->new( $self->session, "VersionTag" );
-    my $inbox       = WebGUI::Inbox->new( $self->session );
 
     # First time through, send the message(s)
     if ( $instance->getScratch("status") eq "" ) {
@@ -209,7 +233,9 @@ sub execute {
     # Tag is approved
     elsif ( $instance->getScratch("status") eq "approved" ) {
         # Clean up after ourselves
-        $self->setMessageCompleted( $instance );
+        if (! $self->setMessageCompleted( $instance ) ) {
+            return $self->ERROR;
+        }
         $instance->deleteScratch( "status" );
         
         # We're done here
@@ -264,13 +290,13 @@ sub sendMessage {
             "op=manageRevisionsInTag;workflowInstanceId=" . $instance->getId
             . ";tagId=" . $versionTag->getId
         );
-    my $messageText 
-        = join "\n\n",
-            $self->get("message"),
-            $approvalUrl,
-            $versionTag->get("comments"),
-        ;
-
+    my $var = {
+        message  => $self->get('message'),
+        comments => $versionTag->get('comments'),
+        url      => $approvalUrl,
+    };
+    my $template     = WebGUI::Asset->newByDynamicClass($self->session, $self->get('templateId'));
+    my $messageText  = $template->process($var);
     for my $groupId ( @{ $self->getGroupToApprove } ) {
         my $message 
             = $inbox->addMessage({
@@ -279,7 +305,7 @@ sub sendMessage {
                 groupId => $groupId,
                 status  => 'pending',
             });
-        $messageIds = join ",", $messageIds, $message->getId;
+        $messageIds = $messageIds ? join(",", $messageIds, $message->getId) : $message->getId;
     }
 
     # Keep track of message Ids so we can complete them 
@@ -305,6 +331,7 @@ sub setApproved {
     my $self        = shift;
     my $instance    = shift;
     $instance->setScratch( "status", "approved" );
+    $instance->set({});  ##Bump spectre to get it to run right now.
 }	
 
 #----------------------------------------------------------------------------
@@ -324,7 +351,8 @@ sub setDenied {
     my $self        = shift;
     my $instance    = shift;
     $instance->setScratch( "status", "denied" );
-}	
+    $instance->set({});  ##Bump spectre to get it to run right now.
+}
 
 #----------------------------------------------------------------------------
 
@@ -336,23 +364,32 @@ workflow instance we're part of.
 =cut
 
 sub setMessageCompleted {
-    my $self        = shift;
-    my $instance    = shift;
-    my $inbox       = WebGUI::Inbox->new( $self->session );
+    my $self     = shift;
+    my $instance = shift;
+    my $inbox    = WebGUI::Inbox->new( $self->session );
 
     # Set all messages to completed
-    for my $messageId ( split /,/, $instance->getScratch("messageId") ) { 
-        if($messageId){
-            my $message = $inbox->getMessage( $messageId );
-            $message->setCompleted if $message;
+    for my $messageId ( split /,/, $instance->getScratch("messageId") ) {
+        if ($messageId) {
+            my $message = $inbox->getMessage($messageId);
+            if ($message) {
+                $message->setCompleted;
+            }
+            else {
+                $self->session->log->error("Could not get inbox message for messageId: $messageId");
+                return 0;
+            }
         }
-    }
+        else {
+            $self->session->log->error("Malformed workflow instance scratch variable messageId for instance: ". $instance->getId);
+            return 0;
+        }
+    } ## end for my $messageId ( split...)
 
-    $instance->deleteScratch( "messageId" );
+    $instance->deleteScratch("messageId");
 
-    return;
-}
-
+    return 1;
+} ## end sub setMessageCompleted
 
 1;
 

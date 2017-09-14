@@ -18,11 +18,16 @@ use strict;
 use lib "$FindBin::Bin/../lib";
 use Test::More;
 use Test::Deep;
+use Data::Dumper;
 use JSON;
 use HTML::Form;
 
 use WebGUI::Test; # Must use this before any other WebGUI modules
 use WebGUI::Session;
+use WebGUI::Shop::Cart;
+use WebGUI::Shop::Credit;
+use WebGUI::Shop::PayDriver;
+use WebGUI::User;
 
 #----------------------------------------------------------------------------
 # Init
@@ -31,21 +36,12 @@ my $session = WebGUI::Test->session;
 #----------------------------------------------------------------------------
 # Tests
 
-my $tests = 54;
-plan tests => 1 + $tests;
+plan tests => 56;
 
 #----------------------------------------------------------------------------
 # figure out if the test can actually run
 
 my $e;
-
-my $loaded = use_ok('WebGUI::Shop::PayDriver');
-
-my $storage;
-
-SKIP: {
-
-skip 'Unable to load module WebGUI::Shop::PayDriver', $tests unless $loaded;
 
 #######################################################################
 #
@@ -92,19 +88,6 @@ cmp_deeply  (
                 label           => ignore(),
                 hoverHelp       => ignore(),
                 defaultValue    => 7,
-            },
-            receiptEmailTemplateId  => {
-                fieldType       => 'template',
-                label           => ignore(),
-                hoverHelp       => ignore(),
-                defaultValue    => 'bPz1yk6Y9uwMDMBcmMsSCg',
-                namespace       => 'Shop/EmailReceipt',
-            },
-            saleNotificationGroupId  => {
-                fieldType       => 'group',
-                label           => ignore(),
-                hoverHelp       => ignore(),
-                defaultValue    => 3,
             },
         }
     } ],
@@ -268,6 +251,7 @@ isnt(
 
 my $cart = $driver->getCart;
 isa_ok      ($cart, 'WebGUI::Shop::Cart', 'getCart returns an instantiated WebGUI::Shop::Cart object');
+addToCleanup($cart);
 
 #######################################################################
 #
@@ -286,7 +270,7 @@ my @forms = HTML::Form->parse($html, 'http://www.webgui.org');
 is          (scalar @forms, 1, 'getEditForm generates just 1 form');
 
 my @inputs = $forms[0]->inputs;
-is          (scalar @inputs, 14, 'getEditForm: the form has 14 controls');
+is          (scalar @inputs, 11, 'getEditForm: the form has 11 controls');
 
 my @interestingFeatures;
 foreach my $input (@inputs) {
@@ -340,18 +324,6 @@ cmp_deeply(
         },
         {
             name    => '__groupToUse_isIn',
-            type    => 'hidden',
-        },
-        {
-            name    => 'receiptEmailTemplateId',
-            type    => 'option',
-        },
-        {
-            name    => 'saleNotificationGroupId',
-            type    => 'option',
-        },
-        {
-            name    => '__saleNotificationGroupId_isIn',
             type    => 'hidden',
         },
     ],
@@ -486,6 +458,84 @@ TODO: {
 
 #######################################################################
 #
+# appendCartVariables
+#
+#######################################################################
+
+my $versionTag = WebGUI::VersionTag->getWorking($session);
+my $node    = WebGUI::Asset->getImportNode($session);
+my $widget  = $node->addChild({
+    className          => 'WebGUI::Asset::Sku::Product',
+    title              => 'Test product for cart template variables in the Product',
+    isShippingRequired => 1,
+});
+my $blue_widget  = $widget->setCollateral('variantsJSON', 'variantId', 'new',
+    {
+        shortdesc => 'Blue widget',   price     => 5.00,
+        varSku    => 'blue-widget',  weight    => 1.0,
+        quantity  => 9999,
+    }
+);
+
+$versionTag->commit;
+my $credited_user = WebGUI::User->create($session);
+$session->user({user => $credited_user});
+my $cart = WebGUI::Shop::Cart->newBySession($session);
+WebGUI::Test->addToCleanup($versionTag, $cart, $credited_user);
+my $addressBook = $cart->getAddressBook;
+my $workAddress = $addressBook->addAddress({
+    label => 'work',
+    organization => 'Plain Black Corporation',
+    address1 => '1360 Regent St. #145',
+    city => 'Madison', state => 'WI', code => '53715',
+    country => 'United States',
+});
+$cart->update({
+    billingAddressId  => $workAddress->getId,
+    shippingAddressId => $workAddress->getId,
+});
+$widget->addToCart($widget->getCollateral('variantsJSON', 'variantId', $blue_widget));
+
+my $cart_variables = {};
+$driver->appendCartVariables($cart_variables);
+
+cmp_deeply(
+    $cart_variables,
+    {
+        taxes                 => ignore(),
+        shippableItemsInCart  => 1,
+        totalPrice            => '5.00',
+        inShopCreditDeduction => ignore(),
+        inShopCreditAvailable => ignore(),
+        subtotal              => '5.00',
+        shipping              => ignore(),
+
+    },
+    'appendCartVariables: checking shippableItemsInCart and totalPrice & subtotal formatting'
+);
+
+my $credit = WebGUI::Shop::Credit->new($session, $credited_user->userId);
+$credit->adjust('1', 'credit for testing');
+$cart_variables = {};
+$driver->appendCartVariables($cart_variables);
+cmp_deeply(
+    $cart_variables,
+    {
+        taxes                 => ignore(),
+        shippableItemsInCart  => 1,
+        subtotal              => '5.00',
+        inShopCreditDeduction => '-1.00',
+        inShopCreditAvailable => '1.00',
+        totalPrice            => '4.00',
+        shipping              => ignore(),
+
+    },
+    '... checking credit display'
+);
+
+
+#######################################################################
+#
 # delete
 #
 #######################################################################
@@ -500,10 +550,3 @@ is ($count, 0, 'delete deleted the object');
 
 undef $driver;
 
-
-}
-
-#----------------------------------------------------------------------------
-# Cleanup
-END {
-}

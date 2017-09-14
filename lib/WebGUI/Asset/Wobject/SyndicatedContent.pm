@@ -21,7 +21,7 @@ use Class::C3;
 use base qw(WebGUI::AssetAspect::RssFeed WebGUI::Asset::Wobject);
 use WebGUI::Macro;
 use XML::FeedPP;
-
+use XML::FeedPP::MediaRSS;
 
 =head1 NAME
 
@@ -106,7 +106,23 @@ sub definition {
 				label=>$i18n->get('hasTermsLabel'),
                 		hoverHelp=>$i18n->get('hasTermsLabel description'),
                 		maxlength=>255
-				}
+				},
+            sortItems => {
+                tab             => 'properties',
+                fieldType       => 'selectBox',
+                options         => do {
+                    tie my %o, 'Tie::IxHash', (
+                        none        => $i18n->get('no order'),
+                        feed        => $i18n->get('feed order'),
+                        pubDate_asc => $i18n->get('publication date ascending'),
+                        pubDate_des =>
+                            $i18n->get('publication date descending'),
+                    ); \%o;
+                },
+                defaultValue    => 'none',
+                label           => $i18n->get('sortItemsLabel'),
+                hoverHelp       => $i18n->get('sortItemsLabel description'),
+            },
 		);
         push(@{$definition}, {
 		assetName=>$i18n->get('assetName'),
@@ -129,11 +145,14 @@ Combines all feeds into a single XML::FeedPP object.
 =cut
 
 sub generateFeed {
-	my $self = shift;
+	my $self  = shift;
     my $limit = shift || $self->get('maxHeadlines');
-	my $feed = XML::FeedPP::Atom->new();
-	my $log = $self->session->log;
-	
+	my $log   = $self->session->log;
+	my $sort  = $self->get('sortItems');
+
+	my @opt   = (use_ixhash => 1) if $sort eq 'feed';
+	my $feed  = XML::FeedPP::Atom->new(@opt);
+
 	# build one feed out of many
     my $newlyCached = 0;
 	foreach my $url (split(/\s+/, $self->get('rssUrl'))) {
@@ -144,43 +163,59 @@ sub generateFeed {
 		}
 		my $cache = WebGUI::Cache->new($self->session, $url, "RSS");
 		my $value = $cache->get;
+        #warn "got this: $value\n";
 		unless ($value) {
             $value = $cache->setByHTTP($url, $self->get("cacheTimeout"));
             $newlyCached = 1;
         }
-        # if the content can be downgraded, it is either valid latin1 or didn't have
-        # an HTTP Content-Encoding header.  In the second case, XML::FeedPP will take
-        # care of any encoding specified in the XML prolog
-        utf8::downgrade($value, 1);
+
         eval {
-            my $singleFeed = XML::FeedPP->new($value, utf8_flag => 1, -type => 'string');
-            $feed->merge($singleFeed);
+            my $singleFeed = XML::FeedPP->new($value, utf8_flag => 1, -type => 'string', xml_deref => 1, @opt);
+            $feed->merge_channel($singleFeed);
+            $feed->merge_item($singleFeed);
         };
         if ($@) {
             $log->error("Syndicated Content asset (".$self->getId.") has a bad feed URL (".$url."). Failed with ".$@);
         }
 	}
-	
+
 	# build a new feed that matches the term the user is interested in
 	if ($self->get('hasTerms') ne '') {
 		my @terms = split /,\s*/, $self->get('hasTerms'); # get the list of terms
 		my $termRegex = join("|", map quotemeta($_), @terms); # turn the terms into a regex string
-		my @items = $feed->match_item(title=>qr/$termRegex/msi, description=>qr/$termRegex/msi);
-		$feed->clear_item;
-		foreach my $item (@items) {
-			$feed->add_item($item);
-		}
+		my @items =  $feed->match_item(title       => qr/$termRegex/msi);
+		push @items, $feed->match_item(description => qr/$termRegex/msi);
+        $feed->clear_item;
+        ITEM: foreach my $item (@items) {
+            $feed->add_item($item);
+        }
 	}
-	
-	# sort them by date
-	$feed->sort_item();
-	
+
+    my %seen = {};
+    my @items = $feed->get_item;
+    $feed->clear_item;
+    ITEM: foreach my $item (@items) {
+        my $key = join "\n", $item->link, $item->pubDate, $item->description, $item->title;
+        next ITEM if $seen{$key}++;
+        $feed->add_item($item);
+    }
+
+	# sort them by date and remove any duplicate from the OR based term matching above
+    if ($sort =~ /^pubDate/) {
+        $feed->sort_item();
+    }
+    if ($sort =~ /_asc$/) {
+        my @items = $feed->get_item;
+        $feed->clear_item;
+        $feed->add_item($_) for (reverse @items);
+    }
+
 	# limit the feed to the maximum number of headlines (or the feed generator limit).
 	$feed->limit_item($limit);
-	
+
 	# mark this asset as updated
 	$self->update({}) if ($newlyCached);
-	
+
 	return $feed;
 }
 
@@ -244,6 +279,7 @@ A reference to an XML::FeedPP object.
 
 sub getTemplateVariables {
 	my ($self, $feed) = @_;
+	my $media = XML::FeedPP::MediaRSS->new($feed);
 	my @items = $feed->get_item;
 	my %var;
 	$var{channel_title} = WebGUI::HTML::filter(scalar $feed->title, 'javascript');
@@ -260,6 +296,7 @@ sub getTemplateVariables {
 	$var{channel_image_height} = WebGUI::HTML::filter($image[5], 'javascript');
 	foreach my $object (@items) {
 		my %item;
+		$item{media} = [ map { { %$_ } } $media->for_item($object) ];
         $item{title} = WebGUI::HTML::filter(scalar $object->title, 'javascript');
         $item{date} = WebGUI::HTML::filter(scalar $object->get_pubDate_epoch, 'javascript');
         $item{category} = WebGUI::HTML::filter(scalar $object->category, 'javascript');
@@ -267,27 +304,38 @@ sub getTemplateVariables {
         $item{guid} = WebGUI::HTML::filter(scalar $object->guid, 'javascript');
         $item{link} = WebGUI::HTML::filter(scalar $object->link, 'javascript');
         my $description = WebGUI::HTML::filter(scalar($object->description), 'javascript');
+        my $raw_description = WebGUI::HTML::filter($description, 'all');
+        $raw_description =~ s/^\s+//s;
         $item{description} = defined $description ? $description : '';
-        $item{descriptionFirst100words} = $item{description};
-        $item{descriptionFirst100words} =~ s/(((\S+)\s+){100}).*/$1/s;
+        $item{descriptionFirst100words} = $raw_description;
+        $item{descriptionFirst100words} =~ s/(((\S+)\s+){1,100}).*/$1/ms;
         $item{descriptionFirst75words} = $item{descriptionFirst100words};
-        $item{descriptionFirst75words} =~ s/(((\S+)\s+){75}).*/$1/s;
+        $item{descriptionFirst75words} =~ s/(((\S+)\s+){1,75}).*/$1/ms;
         $item{descriptionFirst50words} = $item{descriptionFirst75words};
-        $item{descriptionFirst50words} =~ s/(((\S+)\s+){50}).*/$1/s;
+        $item{descriptionFirst50words} =~ s/(((\S+)\s+){1,50}).*/$1/ms;
         $item{descriptionFirst25words} = $item{descriptionFirst50words};
-        $item{descriptionFirst25words} =~ s/(((\S+)\s+){25}).*/$1/s;
+        $item{descriptionFirst25words} =~ s/(((\S+)\s+){1,25}).*/$1/ms;
         $item{descriptionFirst10words} = $item{descriptionFirst25words};
-        $item{descriptionFirst10words} =~ s/(((\S+)\s+){10}).*/$1/s;
-        $item{descriptionFirst2paragraphs} = $item{description};
-        $item{descriptionFirst2paragraphs} =~ s/^((.*?\n){2}).*/$1/s;
-        $item{descriptionFirstParagraph} = $item{descriptionFirst2paragraphs};
-        $item{descriptionFirstParagraph} =~ s/^(.*?\n).*/$1/s;
-        $item{descriptionFirst4sentences} = $item{description};
-        $item{descriptionFirst4sentences} =~ s/^((.*?\.){4}).*/$1/s;
+        $item{descriptionFirst10words} =~ s/(((\S+)\s+){1,10}).*/$1/ms;
+        if ($description =~ /<p>/) {
+            my $html = $description;
+            $html =~ tr/\n/ /s;
+            my @paragraphs = map { "<p>".$_."</p>" } WebGUI::HTML::splitTag($html,3);
+            $item{descriptionFirstParagraph}   = $paragraphs[0];
+            $item{descriptionFirst2paragraphs} = join '', @paragraphs[0..1];
+        }
+        else {
+            $item{descriptionFirst2paragraphs} = $item{description};
+            $item{descriptionFirst2paragraphs} =~ s/^((.*?\n){2}).*/$1/s;
+            $item{descriptionFirstParagraph} = $item{descriptionFirst2paragraphs};
+            $item{descriptionFirstParagraph} =~ s/^(.*?\n).*/$1/s;
+        }
+        $item{descriptionFirst4sentences} = $raw_description;
+        $item{descriptionFirst4sentences} =~ s/^((.*?\.){1,4}).*/$1/s;
         $item{descriptionFirst3sentences} = $item{descriptionFirst4sentences};
-        $item{descriptionFirst3sentences} =~ s/^((.*?\.){3}).*/$1/s;
+        $item{descriptionFirst3sentences} =~ s/^((.*?\.){1,3}).*/$1/s;
         $item{descriptionFirst2sentences} = $item{descriptionFirst3sentences};
-        $item{descriptionFirst2sentences} =~ s/^((.*?\.){2}).*/$1/s;
+        $item{descriptionFirst2sentences} =~ s/^((.*?\.){1,2}).*/$1/s;
         $item{descriptionFirstSentence} = $item{descriptionFirst2sentences};
         $item{descriptionFirstSentence} =~ s/^(.*?\.).*/$1/s;
 		push @{$var{item_loop}}, \%item;

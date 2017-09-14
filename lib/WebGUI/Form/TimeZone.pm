@@ -95,19 +95,23 @@ sub isDynamicCompatible {
 
 #-------------------------------------------------------------------
 
-=head2 toHtml ( )
+=head2 new ( )
 
-Renders a database connection picker control.
+Extend the base method to handle spaces in the value and/or default value.
 
 =cut
 
-sub toHtml {
-	my $self = shift;
+sub new {
+	my $class = shift;
+    my $self  = $class->SUPER::new(@_);
+    my $value = $self->get('value');
+    $value =~ tr/ /_/;
+    $self->set('value', $value);
+    my $defaultValue = $self->get('defaultValue');
+    $defaultValue =~ tr/ /_/;
+    $self->set('defaultValue', $defaultValue);
 	$self->set("options", $self->session->datetime->getTimeZones());
-	return $self->SUPER::toHtml();
+    return $self;
 }
 
-
-
 1;
-

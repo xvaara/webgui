@@ -190,6 +190,7 @@ sub importProducts {
         my %productRow;
         ##Order the data according to the headers, in whatever order they exist.
         @productRow{ @headers } = @{ $productRow };
+        $productRow{price} =~ tr/0-9.//cd;
         ##Isolate just the collateral from the other product information
         my %productCollateral;
         @productCollateral{ @collateralFields } = @productRow{ @collateralFields };
@@ -288,12 +289,20 @@ sub view {
 	
 	# get other shelves
 	my @childShelves = ();
-	SHELF: foreach my $child (@{$self->getLineage(['children'],{returnObjects=>1,includeOnlyClasses=>['WebGUI::Asset::Wobject::Shelf']})}) {
+        my $childIter = $self->getLineageIterator(['children'],{includeOnlyClasses=>['WebGUI::Asset::Wobject::Shelf']});
+        SHELF: while ( 1 ) {
+            my $child;
+            eval { $child = $childIter->() };
+            if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+                $session->log->error($x->full_message);
+                next;
+            }
+            last unless $child;
         next SHELF unless $child->canView;
 		my $properties  = $child->get;
-		$child->{url}   = $child->getUrl;
-		$child->{title} = $child->getTitle;
-		push @childShelves, $child;
+		$properties->{url}   = $child->getUrl;
+		$properties->{title} = $child->getTitle;
+		push @childShelves, $properties;
 	}
 	
 	# get other child skus
@@ -328,7 +337,7 @@ sub view {
         my $sku               = $asset->get;
         $sku->{url}           = $asset->getUrl;
         $sku->{thumbnailUrl}  = $asset->getThumbnailUrl;
-        $sku->{price}         = sprintf("%.2f", $asset->getPrice);
+        $sku->{price}         = sprintf("%.2f", $asset->getPrice ? $asset->getPrice : 0);
         $sku->{addToCartForm} = $asset->getAddToCartForm;
         push @skus, $sku;
     }

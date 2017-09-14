@@ -37,6 +37,7 @@ sub definition {
     my $session = shift;
     my $definition = shift;
     my $i18n = WebGUI::International->new($session, 'Asset_StoryTopic');
+    my $other_i18n = WebGUI::International->new($session, 'Asset_StoryArchive');
     my %properties;
     tie %properties, 'Tie::IxHash';
     %properties = (
@@ -71,6 +72,17 @@ sub definition {
             filter       => 'fixId',
             namespace    => 'Story',
             defaultValue => 'TbDcVLbbznPi0I0rxQf2CQ',
+        },
+        storySortOrder => { 
+            fieldType     => "selectBox",
+            tab           => 'display',
+            defaultValue  => 'Chronologically',
+            options       => {
+                 Alphabetically  => $other_i18n->get('alphabetically'),
+                 Chronologically => $other_i18n->get('chronologically')
+            },
+            label         => $other_i18n->get('sortAlphabeticallyChronologically'),
+            hoverHelp     => $other_i18n->get('sortAlphabeticallyChronologically description'),
         },
     );
     push(@{$definition}, {
@@ -174,48 +186,63 @@ sub viewTemplateVariables {
     my $wordList = WebGUI::Keyword::string2list($self->get('keywords'));
     my $key      = WebGUI::Keyword->new($session);
     my $p        = $key->getMatchingAssets({
-        keywords     => $wordList,
-        isa          => 'WebGUI::Asset::Story',
-        usePaginator => 1,
-        rowsPerPage  => $numberOfStories,
+        sortOrder      => $self->get('storySortOrder') || 'Chronologically',
+        keywords       => $wordList,
+        isa            => 'WebGUI::Asset::Story',
+        usePaginator   => 1,
+        rowsPerPage    => $numberOfStories,
     });
     my $storyIds = $p->getPageData();
-    $var->{story_loop} = [];
 
     my $icon          = $session->icon;
     my $userUiLevel   = $session->user->profileField("uiLevel");
     my $uiLevels      = $session->config->get('assetToolbarUiLevel');
     my $i18n          = WebGUI::International->new($session);
+    my $url           = $session->url;
 
     ##Only build objects for the assets that we need
-    STORY: foreach my $storyId (@{ $storyIds }) {
-        my $story = WebGUI::Asset->new($session, $storyId->{assetId}, $storyId->{className}, $storyId->{revisionDate});
-        next STORY unless $story;
-        my $storyVars = {
-            url           => ( $exporting
-                               ? $story->getUrl
-                               : $session->url->append($self->getUrl, 'func=viewStory;assetId='.$storyId->{assetId}) ),
-            title         => $story->getTitle,
-            creationDate  => $story->get('creationDate'),
-        };
-        if ($story->canEdit && $userUiLevel >= $uiLevels->{delete} && !$exporting) {
-            $storyVars->{deleteIcon} = $icon->delete('func=delete', $story->get('url'), $i18n->get(43));
+    $var->{story_loop} = [
+        map {
+            my $v = $_->viewTemplateVariables;
+            if ($exporting) {
+                $v->{url} = $_->getUrl;
+            }
+            else {
+                my $params = "func=viewStory;assetId=$v->{assetId}";
+                my $rawUrl = $v->{url};
+                $v->{url}  = $url->append($self->getUrl, $params);
+                if ($v->{canEdit}) {
+                    if ($userUiLevel >= $uiLevels->{delete}) {
+                        $v->{deleteIcon} = $icon->delete('func=delete', $rawUrl, $i18n->get(43));
+                    }
+                    if ($userUiLevel >= $uiLevels->{edit}) {
+                        $v->{editIcon} = $icon->edit('func=edit', $rawUrl);
+                    }
+                }
+            }
+            $v;
         }
-        if ($story->canEdit && $userUiLevel >= $uiLevels->{edit}   && !$exporting) {
-            $storyVars->{editIcon}   = $icon->edit('func=edit', $story->get('url'));
+        grep { $_ }
+        map  {
+            WebGUI::Asset->new(
+                $session, @{ $_ }{ qw( assetId className revisionDate ) }
+            )
         }
-        push @{$var->{story_loop}}, $storyVars;
-    }
+        @{ $storyIds }
+    ];
 
-    if ($self->{_standAlone}) {
+    if (@{ $storyIds }) {
         my $topStoryData = $storyIds->[0];
-        shift @{ $var->{story_loop} };
+        my $topStoryVars = shift @{ $var->{story_loop} };
         ##Note, this could have saved from the loop above, but this looks more clean and encapsulated to me.
         my $topStory   = WebGUI::Asset->new($session, $topStoryData->{assetId}, $topStoryData->{className}, $topStoryData->{revisionDate});
+        $var->{topStory}               = $topStoryVars;
         $var->{topStoryTitle}          = $topStory->getTitle;
         $var->{topStorySubtitle}       = $topStory->get('subtitle');
         $var->{topStoryUrl}            = $session->url->append($self->getUrl, 'func=viewStory;assetId='.$topStoryData->{assetId}),
         $var->{topStoryCreationDate}   = $topStory->get('creationDate');
+        $var->{topStoryEditIcon}       = $topStoryVars->{editIcon};
+        $var->{topStoryDeleteIcon}     = $topStoryVars->{deleteIcon};
         ##TODO: Photo variables
         my $photoData = $topStory->getPhotoData;
         PHOTO: foreach my $photo (@{ $photoData }) {

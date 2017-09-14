@@ -9,7 +9,8 @@ our $I18N = {
     },
 
     'vies unavailable' => {
-        message => q|Number validation currently not available. Check later.|,
+        message => q|Number validation is currently not available. Your number will be rechecked automatically
+after some time.|,
         lastUpdated => 0,
         context => q|An error message|,
     },
@@ -180,6 +181,24 @@ our $I18N = {
         message => q|You have already registered a VAT number for this country.|,
         lastUpdated => 0,
         context => q|Error message on adding vat number|,
+    },
+
+    'Enter VAT numbers' => {
+        message => q|Enter VAT numbers|,
+        lastUpdated => 0,
+        context => q|Title for the per-user vat number management screen|,
+    },
+
+    'Approved for use' => {
+        message => q|Approved for use|,
+        lastUpdated => 0,
+        context => q|Status flag for the VAT number.|,
+    },
+
+    'Add another VAT number' => {
+        message => q|Add another VAT number|,
+        lastUpdated => 0,
+        context => q||,
     },
 
 

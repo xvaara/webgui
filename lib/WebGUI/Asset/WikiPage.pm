@@ -15,6 +15,7 @@ use Class::C3;
 use base qw(
     WebGUI::AssetAspect::Subscribable
     WebGUI::AssetAspect::Comments 
+    WebGUI::AssetAspect::AutoSynopsis
     WebGUI::Asset
 );
 use Tie::IxHash;
@@ -164,7 +165,7 @@ sub getAutoCommitWorkflowId {
 
         # delete spam
         my $spamStopWords = $self->session->config->get('spamStopWords');
-        if (ref $spamStopWords eq 'ARRAY') {
+        if (ref $spamStopWords eq 'ARRAY' && @{ $spamStopWords }) {
             my $spamRegex = join('|',@{$spamStopWords});
             $spamRegex =~ s/\s/\\ /g;
             if ($self->get('content') =~ m{$spamRegex}xmsi) {
@@ -265,13 +266,17 @@ Get the common template vars for this asset
 
 sub getTemplateVars {
     my ( $self ) = @_;
-    my $i18n        = WebGUI::International->new($self->session, "Asset_WikiPage");
-    my $wiki        = $self->getWiki;
-    my $owner       = WebGUI::User->new( $self->session, $self->get('ownerUserId') );
-    my $keywords    = WebGUI::Keyword->new($self->session)->getKeywordsForAsset({
+    my $session  = $self->session;
+    my $i18n     = WebGUI::International->new($session, "Asset_WikiPage");
+    my $wiki     = $self->getWiki;
+    my $owner    = WebGUI::User->new( $session, $self->get('ownerUserId') );
+    my $keyObj   = WebGUI::Keyword->new($session);
+
+    my $keywords    = $keyObj->getKeywordsForAsset({
         asset       => $self,
         asArrayRef  => 1,
     });
+
     my @keywordsLoop = ();
     foreach my $word (@{$keywords}) {
         push @keywordsLoop, {
@@ -297,8 +302,9 @@ sub getTemplateVars {
         historyUrl          => $self->getUrl("func=getHistory"),
         editContent         => $self->getEditForm,
         allowsAttachments   => $wiki->get("allowAttachments"),
-        comments	    => $self->getFormattedComments(),
+        comments	        => $self->getFormattedComments(),
         canEdit             => $self->canEdit,
+        canAdminister       => $wiki->canAdminister,
 		isProtected         => $self->isProtected,
         content             => $wiki->autolinkHtml(
             $self->scrubContent,
@@ -398,21 +404,24 @@ Extends the master method to handle properties and attachments.
 =cut
 
 sub processPropertiesFromFormPost {
-	my $self = shift;
-	$self->next::method(@_);
-	my $actionTaken = ($self->session->form->process("assetId") eq "new") ? "Created" : "Edited";
+    my $self    = shift;
+    my $session = $self->session;
+    $self->next::method(@_);
+    my $actionTaken = ($session->form->process("assetId") eq "new") ? "Created" : "Edited";
     my $wiki = $self->getWiki;
-	my $properties = {
-		groupIdView 	=> $wiki->get('groupIdView'),
-		groupIdEdit 	=> $wiki->get('groupToAdminister'),
-		actionTakenBy 	=> $self->session->user->userId,
-		actionTaken 	=> $actionTaken,
-	};
+    my $properties = {
+        groupIdView 	=> $wiki->get('groupIdView'),
+        groupIdEdit 	=> $wiki->get('groupToAdminister'),
+        actionTakenBy 	=> $self->session->user->userId,
+        actionTaken 	=> $actionTaken,
+    };
 
-	if ($wiki->canAdminister) {
-		$properties->{isProtected} = $self->session->form->get("isProtected");
-		$properties->{isFeatured} = $self->session->form->get("isFeatured");
-	}
+    if ($wiki->canAdminister) {
+        $properties->{isProtected} = $session->form->get("isProtected");
+        $properties->{isFeatured}  = $session->form->get("isFeatured");
+    }
+
+    ($properties->{synopsis}) = $self->getSynopsisAndContent(undef, $self->get('content'));
 
 	$self->update($properties);
 
@@ -421,17 +430,17 @@ sub processPropertiesFromFormPost {
         maxImageSize    => $wiki->get('maxImageSize'),
         thumbnailSize   => $wiki->get('thumbnailSize'),
     };
-    my @attachments = $self->session->form->param("attachments");
+    my @attachments = $session->form->param("attachments");
     my @tags = ();
     foreach my $assetId (@attachments) {
-        my $asset = WebGUI::Asset->newByDynamicClass($self->session, $assetId);
+        my $asset = WebGUI::Asset->newByDynamicClass($session, $assetId);
         if (defined $asset) {
             unless ($asset->get("parentId") eq $self->getId) {
                 $asset->setParent($self);
                 $asset->update({
-                    ownerUserId => $self->get("ownerUserId"),
-                    groupIdEdit => $self->get("groupIdEdit"),
-                    groupIdView => $self->get("groupIdView"),
+                    ownerUserId => $self->get( "ownerUserId"      ),
+                    groupIdEdit => $wiki->get( "groupToEditPages" ),
+                    groupIdView => $self->get( "groupIdView"      ),
                     });
             }
             $asset->applyConstraints($options);
@@ -467,6 +476,7 @@ sub scrubContent {
         my $self = shift;
         my $content = shift || $self->get("content");
 
+        $content =~ s/\^-\;//g;
         my $scrubbedContent = WebGUI::HTML::filter($content, $self->getWiki->get("filterCode"));
 
         if ($self->getWiki->get("useContentFilter")) {
@@ -579,6 +589,36 @@ sub www_getHistory {
 			});		
 	}
 	return $self->processTemplate($var, $self->getWiki->get('pageHistoryTemplateId'));
+}
+
+#-------------------------------------------------------------------
+
+=head2 www_purgeRevision
+
+Override the main method to change which group is allowed to purge revisions for WikiPages.  Only
+members who can administer the parent wiki (canAdminister) can purge revisions.
+
+=cut
+
+sub www_purgeRevision {
+	my $self    = shift;
+	my $session = $self->session;
+	return $session->privilege->insufficient() unless $self->getWiki->canAdminister;
+	my $revisionDate = $session->form->process("revisionDate");
+	return undef unless $revisionDate;
+	my $asset = WebGUI::Asset->new($session, $self->getId, $self->get("className"), $revisionDate);
+	return undef if ($asset->get('revisionDate') != $revisionDate);
+	my $parent = $asset->getParent;
+	$asset->purgeRevision;
+	if ($session->form->process("proceed") eq "manageRevisionsInTag") {
+		my $working = (defined $self) ? $self : $parent;
+		$session->http->setRedirect($working->getUrl("op=manageRevisionsInTag"));
+		return undef;
+	}
+	unless (defined $self) {
+		return $parent->www_view;
+	}
+	return $self->www_manageRevisions;
 }
 
 #-------------------------------------------------------------------

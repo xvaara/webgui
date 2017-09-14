@@ -17,7 +17,6 @@ package WebGUI::Shop::PayDriver::PayPal;
 ## this holds some shared functionality, and MUST be overridden for a full payment driver
 use strict;
 use base qw/WebGUI::Shop::PayDriver/;
-use warnings;
 
 =head1 NAME
 
@@ -340,4 +339,3 @@ sub getPaypalCountry {
 }
 
 1;
-

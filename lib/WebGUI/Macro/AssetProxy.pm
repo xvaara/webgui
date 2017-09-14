@@ -27,9 +27,9 @@ Macro for displaying the output of an Asset in another location.
 
 =head3 url | assetId
 
-My specify either the asset url or the asset id. If no Asset with that URL or id can be found, an internationalized error message will be returned instead.
+Specify either the asset url or the asset id. If no Asset with that URL or id can be found, an internationalized error message will be returned instead.
 
-No editing controls (toolbar) will be displayed in the Asset output, even if Admin is turned on.
+Editing controls (toolbar) may or may not be displayed in the Asset output, even if Admin is turned on.
 
 The Not Found Page may not be Asset Proxied.
 
@@ -42,6 +42,15 @@ Defaults to 'url'. But if you want to use an assetId as the first parameter, the
 #-------------------------------------------------------------------
 sub process {
     my ($session, $identifier, $type) = @_;
+    if (!$identifier) {
+        $session->errorHandler->warn('AssetProxy macro called without an asset to proxy. ' 
+        . 'The macro was called through this url: '.$session->url->page);
+        if ($session->var->isAdminOn) {
+            my $i18n = WebGUI::International->new($session, 'Macro_AssetProxy');
+            return $i18n->get('invalid url');
+        }
+        return;
+    }
     my $t = ($session->errorHandler->canShowPerformanceIndicators()) ? [Time::HiRes::gettimeofday()] : undef;
     my $asset;
     if ($type eq 'assetId') {
@@ -52,7 +61,7 @@ sub process {
     }
     if (!defined $asset) {
         $session->errorHandler->warn('AssetProxy macro called invalid asset: '.$identifier
-            .'. The macro was called through this url: '.$session->asset->get('url'));
+            .'. The macro was called through this url: '.$session->url->page);
         if ($session->var->isAdminOn) {
             my $i18n = WebGUI::International->new($session, 'Macro_AssetProxy');
             return $i18n->get('invalid url');
@@ -60,7 +69,7 @@ sub process {
     }
     elsif ($asset->get('state') =~ /^trash/) {
         $session->errorHandler->warn('AssetProxy macro called on asset in trash: '.$identifier
-            .'. The macro was called through this url: '.$session->asset->get('url'));
+            .'. The macro was called through this url: '.$session->url->page);
         if ($session->var->isAdminOn) {
             my $i18n = WebGUI::International->new($session, 'Macro_AssetProxy');
             return $i18n->get('asset in trash');
@@ -68,7 +77,7 @@ sub process {
     }
     elsif ($asset->get('state') =~ /^clipboard/) {
         $session->errorHandler->warn('AssetProxy macro called on asset in clipboard: '.$identifier
-            .'. The macro was called through this url: '.$session->asset->get('url'));
+            .'. The macro was called through this url: '.$session->url->page);
         if ($session->var->isAdminOn) {
             my $i18n = WebGUI::International->new($session, 'Macro_AssetProxy');
             return $i18n->get('asset in clipboard');

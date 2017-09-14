@@ -32,6 +32,16 @@ our $I18N = {
 		lastUpdated => 1078852836,
 	},
 
+	'deactivate account template' => {
+		message => q|Deactivate Account Template|,
+		lastUpdated => 1269277147,
+	},
+
+	'deactivate account template help' => {
+		message => q|Select a template to display the screen where the user deactivates their account.|,
+		lastUpdated => 1269277148,
+	},
+
 	'expired password template' => {
 		message => q|Expired Password Template|,
 		lastUpdated => 1078852836
@@ -65,6 +75,12 @@ our $I18N = {
     'account activation template title' => {
         message => q|WebGUI Authentication Account Activation Mail Template|,
         lastUpdated => 1230600500,
+        context => q|The title of the help page for the webgui auth account activition mail template.|,
+    },
+
+    'account deactivate account template title' => {
+        message => q|WebGUI Authentication Deactivate Account Template|,
+        lastUpdated => 1269279365,
         context => q|The title of the help page for the webgui auth account activition mail template.|,
     },
 
@@ -719,8 +735,9 @@ Settings screen, displayed as hoverhelp.|,
 	},
 
 	'recover password email text1' => {
-		message => q|We have received your request to change the password for |,
+		message => q|We have received your request to change the password for %s.|,
 		lastUpdated => 1189780432,
+        context => q|%s is the URL of the site|,
 	},
 	
 	'recover password email text2' => {
@@ -807,6 +824,31 @@ Settings screen, displayed as hoverhelp.|,
         lastUpdated => 0,
         context => q|Description of the webguiUseEmailAsUsername field, used as hoverhelp on the Auth tab of the Edit Settings screen.|,
     },
+
+    'Password Recovery Email Template' => {
+        message     => 'Password Recovery Email Template',
+        lastUpdated => 0,
+        context => q|Label in the auth settings|,
+    },
+
+    'password recovery email template help' => {
+        message     => 'Choose a template to style the emails sent out for recovering passwords',
+        lastUpdated => 0,
+        context => q|Label in the auth settings|,
+    },
+
+    'recovery email template title' => {
+        message     => 'WebGUI Authentication Password Recovery Email Template',
+        lastUpdated => 0,
+        context => q|template help|,
+    },
+
+    'recoverPasswordUrl' => {
+        message     => 'The URL for the user to visit to reset their password.',
+        lastUpdated => 0,
+        context => q|template help|,
+    },
+
 };
 
 1;

@@ -48,6 +48,7 @@ my $dummy = WebGUI::Asset->getDefault($session)->addChild({
     synopsis    => 'Dummy Synopsis',
     description => 'Dummy Description',
 });
+WebGUI::Test->addToCleanup($dummy);
 
 #####################################################
 #
@@ -103,8 +104,8 @@ cmp_deeply(
     methods(
         title        => 'Dummy Title',
         description  => 'Dummy Synopsis',  ##Not description
-        link         => '/home/shawshank',
-        copyright    => undef,
+        link         => $session->url->getSiteURL . '/home/shawshank',
+        copyright    => bool(0),
     ),
     '... title, description, link inherit from asset by default, copyright unset'
 );
@@ -139,7 +140,7 @@ cmp_deeply(
     methods(
         title        => 'Rita Hayworth and the Shawshank Redemption',
         description  => 'A good movie, providing loads of testing collateral',
-        link         => '/home/shawshank',
+        link         => $session->url->getSiteURL . '/home/shawshank',
         copyright    => 'copyright 2009 Plain Black Corporation',
     ),
     '... feed settings override asset defaults, copyright'
@@ -152,7 +153,7 @@ cmp_deeply(
 #####################################################
 
 my $exportStorage = WebGUI::Storage->create($session);
-WebGUI::Test->storagesToDelete($exportStorage);
+WebGUI::Test->addToCleanup($exportStorage);
 my $basedir = Path::Class::Dir->new($exportStorage->getPath);
 my $assetdir = $basedir->subdir('shawshank');
 my $indexfile = $assetdir->file('index.html');
@@ -170,7 +171,7 @@ cmp_bag(
 );
 
 $exportStorage = WebGUI::Storage->create($session);
-WebGUI::Test->storagesToDelete($exportStorage);
+WebGUI::Test->addToCleanup($exportStorage);
 $basedir   = Path::Class::Dir->new($exportStorage->getPath);
 my $assetfile = $basedir->file('shawshank.html');
 $dummy->exportAssetCollateral($assetfile, {}, $session);
@@ -191,11 +192,4 @@ cmp_bag(
 #
 #####################################################
 
-#----------------------------------------------------------------------------
-# Cleanup
-END {
-    $dummy->purge;
-    my $tag = WebGUI::VersionTag->getWorking($session, 'noCreate');
-    $tag->rollback if $tag;
-}
 #vim:ft=perl

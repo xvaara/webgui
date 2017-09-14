@@ -67,13 +67,17 @@ sub definition {
         tableName=>'Layout',
         className=>'WebGUI::Asset::Wobject::Layout',
         properties=>{
-            templateId =>{
+            templateId => {
+                label        => $i18n->get('layout template title'),
+                hoverHelp    => $i18n->get('template description'),
                 fieldType    =>"template",
                 namespace    => "Layout",
                 defaultValue =>'PBtmpl0000000000000054',
             },
             mobileTemplateId => {
                 fieldType    => ( $session->style->useMobileStyle ? 'template' : 'hidden' ),
+                label        => $i18n->get('mobileTemplateId label'),
+                hoverHelp    => $i18n->get('mobileTemplateId description'),
                 namespace    => 'Layout',
                 defaultValue => 'PBtmpl0000000000000054',
             },
@@ -87,8 +91,10 @@ sub definition {
                 fieldType    =>"checkList"
             },
             assetOrder => {
-                defaultValue =>'asc',
-                fieldType    =>'selectBox',
+                defaultValue => 'asc',
+                fieldType    => 'selectBox',
+                label        => $i18n->get('asset order label'),
+                hoverHelp    => $i18n->get('asset order hoverHelp'),
             }
         }
     });
@@ -115,66 +121,95 @@ sub getEditForm {
     } else {
         $templateId = $self->getValue('templateId');
     }
-    $tabform->getTab("display")->template(
-            -value=>$templateId,
-            -label=>$i18n->get('layout template title'),
-            -hoverHelp=>$i18n->get('template description'),
-            -namespace=>"Layout"
-        );
+
+    tie my %extraFields, "Tie::IxHash";
+    %extraFields = (
+      templateId => {
+          fieldType => 'template',
+          tab       => 'display',
+          value     => $templateId,
+          label     => $i18n->get('layout template title'),
+          hoverHelp => $i18n->get('template description'),
+          namespace => "Layout",
+      });
 
     if ( $self->session->setting->get('useMobileStyle') ) {
-        $tabform->getTab("display")->template(
-            name        => 'mobileTemplateId',
-            value       => $self->getValue('mobileTemplateId'),
-            label       => $i18n->get('mobileTemplateId label'),
-            hoverHelp   => $i18n->get('mobileTemplateId description'),
-            namespace   => 'Layout',
-        );
+      $extraFields{mobileTemplateId} = {
+        fieldType   => 'template',
+        tab         => 'display',
+        name        => 'mobileTemplateId',
+        value       => $self->getValue('mobileTemplateId'),
+        label       => $i18n->get('mobileTemplateId label'),
+        hoverHelp   => $i18n->get('mobileTemplateId description'),
+        namespace   => 'Layout',
+      };
     }
     else {
-        $tabform->getTab("display")->hidden(
+        $extraFields{mobileTemplateId} = {
+            fieldType   => 'hidden',
+            tab         => 'display',
             name        => 'mobileTemplateId',
             value       => $self->getValue('mobileTemplateId'),
-        );
+        };
     }
 
 	tie my %assetOrder, "Tie::IxHash";
 	%assetOrder = (
-		"asc"  =>$i18n->get("asset order asc"),
-		"desc" =>$i18n->get("asset order desc"),
+		"asc"  => $i18n->get("asset order asc"),
+		"desc" => $i18n->get("asset order desc"),
 	);
-	$tabform->getTab("display")->selectBox(
-		-name      => 'assetOrder',
-		-label     => $i18n->get('asset order label'),
-		-hoverHelp => $i18n->get('asset order hoverHelp'),
-		-value     => $self->getValue('assetOrder'),
-		-options   => \%assetOrder
-	);
+    $extraFields{assetOrder} = {
+        tab         => 'display',
+        fieldType   => 'selectBox',
+        name        => 'assetOrder',
+        label       => $i18n->get('asset order label'),
+        hoverHelp   => $i18n->get('asset order hoverHelp'),
+        value       => $self->getValue('assetOrder'),
+        options     => \%assetOrder,
+    };
+
     if ($self->get("assetId") eq "new") {
-                $tabform->getTab("properties")->whatNext(
-                        -options=>{
-                                view=>$i18n->get(823),
-                            viewParent=>$i18n->get(847)
-                                },
-            -value=>"view"
-            );
-    } else {
+        $extraFields{whatNext} = {
+            fieldType   => 'whatNext',
+            value       => "view",
+            options     => {
+                view       => $i18n->get(823),
+                viewParent => $i18n->get(847)
+            },
+        };
+    }
+    else {
         my @assetsToHide = split("\n",$self->getValue("assetsToHide"));
-        my $children = $self->getLineage(["children"],{"returnObjects"=>1, excludeClasses=>["WebGUI::Asset::Wobject::Layout"]});
+        my $childIter = $self->getLineageIterator(["children"],{excludeClasses=>["WebGUI::Asset::Wobject::Layout"]});
         my %childIds;
-        foreach my $child (@{$children}) {
+        while ( 1 ) {
+            my $child;
+            eval { $child = $childIter->() };
+            if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+                $self->session->log->error($x->full_message);
+                next;
+            }
+            last unless $child;
             $childIds{$child->getId} = $child->getTitle;    
         }
-        $tabform->getTab("display")->checkList(
-            -name=>"assetsToHide",
-            -value=>\@assetsToHide,
-            -options=>\%childIds,
-            -label=>$i18n->get('assets to hide'),
-            -hoverHelp=>$i18n->get('assets to hide description'),
-            -vertical=>1,
-            -uiLevel=>9
-            );
+        $extraFields{assetsToHide} = {
+            fieldType => 'checkList',
+            tab       => 'display',
+            name      => "assetsToHide",
+            value     => \@assetsToHide,
+            options   => \%childIds,
+            label     => $i18n->get('assets to hide'),
+            hoverHelp => $i18n->get('assets to hide description'),
+            vertical  => 1,
+            uiLevel   => 9,
+        };
     }
+
+    my $overrides = $self->session->config->get("assets/".$self->get("className"));
+    foreach my $fieldName (keys %extraFields) {
+        $self->setupFormField($tabform, $fieldName, \%extraFields, $overrides);
+    }
+
     return $tabform;
 }
 
@@ -228,11 +263,18 @@ sub prepareView {
 
     my %placeHolder;
     my @children;
-
-    for my $child ( @{ $self->getLineage( ["children"], {
-        returnObjects   => 1,
+    
+    my $childIter = $self->getLineageIterator( ["children"], {
         excludeClasses  => ["WebGUI::Asset::Wobject::Layout"],
-    } ) } ) {
+    } ); 
+    while ( 1 ) {
+        my $child;
+        eval { $child = $childIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $session->log->error($x->full_message);
+            next;
+        }
+        last unless $child;
         my $assetId = $child->getId;
         next
             if ($hidden{$assetId} || ! $child->canView);
@@ -384,11 +426,49 @@ sub getContentLastModified {
     # Buggo: this is a little too conservative.  Children that are hidden maybe shouldn't count.  Hm.
     my $self = shift;
     my $mtime = $self->SUPER::getContentLastModified;
-    foreach my $child (@{$self->getLineage(["children"],{returnObjects=>1, excludeClasses=>['WebGUI::Asset::Wobject::Layout']})}) {
+    my $childIter = $self->getLineageIterator(["children"],{excludeClasses=>['WebGUI::Asset::Wobject::Layout']});
+    while ( 1 ) {
+        my $child;
+        eval { $child = $childIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $self->session->log->error($x->full_message);
+            next;
+        }
+        last unless $child;
         my $child_mtime = $child->getContentLastModified;
         $mtime = $child_mtime if ($child_mtime > $mtime);
     }
     return $mtime;
+}
+
+#-------------------------------------------------------------------
+
+=head2 getContentLastModifiedBy
+
+Extend the base class to include the userid of the person that made last modification.
+
+=cut
+
+sub getContentLastModifiedBy {
+    my $self      = shift;
+    my $mtime     = $self->SUPER::getContentLastModified;
+    my $userId    = $self->get('revisedBy');
+    my $childIter = $self->getLineageIterator(["children"],{excludeClasses=>['WebGUI::Asset::Wobject::Layout']});
+    while ( 1 ) {
+        my $child;
+        eval { $child = $childIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $self->session->log->error($x->full_message);
+            next;
+        }
+        last unless $child;
+        my $child_mtime = $child->getContentLastModified;
+        if ($child_mtime > $mtime) {
+            $mtime = $child_mtime;
+            $userId = $child->get("revisedBy");
+        }
+    }
+    return $userId;
 }
 
 #-------------------------------------------------------------------
@@ -409,12 +489,8 @@ sub www_view {
     ) {
         my $check = $self->checkView;
         return $check if (defined $check);
-        my $cacheKey = "view_".$self->getId;
-        if ($session->env->sslRequest) {
-            $cacheKey .= '_ssl';
-        }
-        my $cache = WebGUI::Cache->new($session, $cacheKey);
-        my $out = $cache->get if defined $cache;
+        my $cache = $self->getCache;
+        my $out   = $cache->get if defined $cache;
         unless ($out) {
             $self->prepareView;
             $session->stow->set("cacheFixOverride", 1);
@@ -436,6 +512,36 @@ sub www_view {
     }
     $self->{_viewPrintOverride} = 1; # we do this to make it output each asset as it goes, rather than waiting until the end
     return $self->SUPER::www_view;
+}
+
+#-------------------------------------------------------------------
+
+=head2 get_add_instance ()
+
+Subclass the standard C<get_add_instance> to inherit 
+C<mobileStyleTemplateId> and C<mobileTemplateId> from the parent asset if it is an instance of
+L<WebGUI::Asset::Wobject::Layout>.
+
+=cut
+
+sub get_add_instance {
+    my $class = shift;
+    my $session = shift;
+    my $parentAsset = shift;
+    my $url = shift;
+    my $prototype = shift;
+
+    my $instance = $class->SUPER::get_add_instance( $session, $parentAsset, $url, $prototype, @_ );
+
+    if( $parentAsset->isa('WebGUI::Asset::Wobject::Layout') ) {
+        $instance->update({  
+            mobileStyleTemplateId => $parentAsset->get("mobileStyleTemplateId"),
+            mobileTemplateId      => $parentAsset->get("mobileTemplateId"),
+        });
+    }
+
+    return $instance;
+
 }
 
 1;

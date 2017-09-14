@@ -2,6 +2,7 @@ package WebGUI::AssetAspect::Subscribable;
 
 use strict;
 use Class::C3;
+use WebGUI::Mail::Send;
 use WebGUI::International;
 
 =head1 NAME
@@ -43,11 +44,7 @@ sub definition {
             namespace       => $class->getSubscriptionTemplateNamespace,
             label           => $i18n->get("Email Template"),
             hoverHelp       => $i18n->get("Email Template help"),
-        },
-        skipNotification => {
-            autoGenerate    => 0,
-            noFormPost      => 1,
-            fieldType       => 'yesNo',
+            defaultValue    => 'limMkk80fMB3fqNZVf162w',
         },
     );
 
@@ -81,13 +78,14 @@ sub duplicate {
 
 =head2 addRevision ( properties [, revisionDate, options ] )
 
-Override addRevision to set skipNotification to 0 for each new revision.
+Override addRevision to set skipNotification to 0 for each new revision.  This preserves whether or
+not a notification was sent for the previous revision.
 
 =cut
 
 sub addRevision {
     my $self        = shift;
-    my $properties  = shift;
+    my $properties  = shift || {};
     
     $properties->{ skipNotification     } = 0;
 
@@ -433,31 +431,10 @@ sub purge {
     my $options = shift;
 
     my $group   = $self->getSubscriptionGroup();
-    $group->delete;
-    $self->next::method($options);
+    $group->delete if $group;
+    my $success = $self->next::method($options);
 
-    return;
-}
-
-#----------------------------------------------------------------------------
-
-=head2 setSkipNotification ( )
-
-Set a flag so that this asset does not send out notifications for this 
-revision.
-
-=cut
-
-sub setSkipNotification {
-    my $self    = shift;
-    my $value   = shift;
-    $value      = defined $value ? $value : 1;
-
-    $self->update( {
-        skipNotification        => $value,
-    } );
-
-    return;
+    return $success;
 }
 
 #----------------------------------------------------------------------------

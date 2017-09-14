@@ -22,6 +22,7 @@ use Test::More; # increment this value for each test you create
 my $session = WebGUI::Test->session;
 
 my ($versionTag, $template) = addTemplate();
+WebGUI::Test->addToCleanup($versionTag);
 
 my $homeAsset = WebGUI::Asset->getDefault($session);
 
@@ -96,6 +97,7 @@ sub addTemplate {
 	my $properties = {
 		title => 'H_homeLink test template',
 		className => 'WebGUI::Asset::Template',
+		parser    => 'WebGUI::Asset::Template::HTMLTemplate',
 		url => 'h_homelink-test',
 		namespace => 'Macro/H_homeLink',
 		template => "HREF=<tmpl_var homeLink.url>\nLABEL=<tmpl_var homeLink.text>",
@@ -121,14 +123,9 @@ sub simpleHTMLParser {
 sub simpleTextParser {
 	my ($text) = @_;
 
-	my ($url)   = $text =~ /HREF=(.+?)(LABEL|\Z)/;
-	my ($label) = $text =~ /LABEL=(.+?)(HREF|\Z)/;
+	my ($url)   = $text =~ /HREF=(.+?)(\n?LABEL|\Z)/;
+	my ($label) = $text =~ /LABEL=(.+?)(\n?HREF|\Z)/;
 
 	return ($url, $label);
 }
-
-END {
-	if (defined $versionTag and ref $versionTag eq 'WebGUI::VersionTag') {
-		$versionTag->rollback;
-	}
-}
+#vim:ft=perl

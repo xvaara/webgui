@@ -251,9 +251,17 @@ our $HELP = {
                 description => 'helpvar form_keywords',
             },
             {
+                name        => 'form_location',
+                description => 'helpvar form_location',
+            },            
+            {
                 name        => 'form_friendsOnly',
                 description => 'helpvar form_friendsOnly',
             },
+            {
+                name        => 'form_sortBy',
+                description => 'helpvar form_sortBy',
+            },            
         ],
     },
 
@@ -331,6 +339,14 @@ our $HELP = {
                         name        => 'form_demote',
                         description => 'helpvar form_demote',
                     },
+                    {
+                        name        => 'form_rotateLeft',
+                        description => 'helpvar form_rotateLeft',
+                    },
+                    {
+                        name        => 'form_rotateRight',
+                        description => 'helpvar form_rotateRight',
+                    },                                                            
                     {
                         name        => 'form_synopsis',
                         description => 'helpvar form_synopsis',

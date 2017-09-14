@@ -18,6 +18,7 @@ use strict;
 use lib "$FindBin::Bin/lib";
 use Test::More;
 use Data::Dumper;
+use File::Spec;
 use WebGUI::Test; # Must use this before any other WebGUI modules
 use WebGUI::Session;
 use WebGUI::Form::Text;
@@ -28,12 +29,12 @@ use WebGUI::Form::HTMLArea;
 my $session         = WebGUI::Test->session;
 
 my $newUser         = WebGUI::User->create( $session );
-WebGUI::Test->usersToDelete($newUser);
+WebGUI::Test->addToCleanup($newUser);
 
 #----------------------------------------------------------------------------
 # Tests
 
-plan tests => 47;        # Increment this number for each test you create
+plan tests => 58;        # Increment this number for each test you create
 
 #----------------------------------------------------------------------------
 # Test the creation of ProfileField
@@ -50,6 +51,11 @@ isa_ok( $aliasField, 'WebGUI::ProfileField' );
 my $uilevelField;
 ok( $uilevelField = WebGUI::ProfileField->new( $session, 'uiLevel' ), 'field "uiLevel instantiated' );
 isa_ok( $uilevelField, 'WebGUI::ProfileField' );
+
+
+my $langField;
+ok( $langField = WebGUI::ProfileField->new( $session, 'language' ), 'field "language instantiated' );
+isa_ok( $langField, 'WebGUI::ProfileField' );
 
 #----------------------------------------------------------------------------
 # Test the formField method
@@ -79,6 +85,28 @@ ok( $ff = $uilevelField->formField(undef, undef, $newUser), 'formField method re
 $ffvalue = $newUser->profileField('uiLevel');
 like( $ff, qr/$ffvalue/, 'html returned contains value, uiLevel field, defaulted user' );
 
+
+
+$ff         = undef;
+$ffvalue    = undef;
+ok( $ff     = $langField->formField, 'formField method returns something, language field, session user' );
+$ffvalue    = $session->user->profileField('language');
+like( $ff, qr/value="$ffvalue"[^>]+selected/, 'html returned contains value, language field, session user' );
+
+installPigLatin();
+WebGUI::Test->addToCleanup(sub {
+	unlink File::Spec->catfile(WebGUI::Test->lib, qw/WebGUI i18n PigLatin WebGUI.pm/);
+	unlink File::Spec->catfile(WebGUI::Test->lib, qw/WebGUI i18n PigLatin.pm/);
+	rmdir File::Spec->catdir(WebGUI::Test->lib, qw/WebGUI i18n PigLatin/);
+});
+
+$ff         = undef;
+$ffvalue    = "PigLatin";
+$session->scratch->setLanguageOverride($ffvalue);
+ok( $ff     = $langField->formField, 'formField method returns something, language field, session user, languageOverride' );
+like( $ff, qr/value="$ffvalue"[^>]+selected/, 'html returned contains value, language field, session user, languageOverride' );
+$session->scratch->delete('language');
+
 ###########################################################
 #
 # create
@@ -91,6 +119,8 @@ my $newProfileField = WebGUI::ProfileField->create($session, 'testField', {
 });
 
 is($newProfileField->get('fieldType'), 'Float', 'create: makes field with correct type');
+is $newProfileField->get('fieldName'), 'testField', '...correct fieldName';
+is $newProfileField->getId, 'testField', '...correct id';
 is($newProfileField->get('label'), 'Test Field', 'correct label');
 is($newProfileField->getLabel, 'Test Field', 'getLabel works, too');
 
@@ -114,6 +144,14 @@ my $newProfileField2 = WebGUI::ProfileField->create($session, 'testField2', {
 is($newProfileField2->get('fieldType'), 'ReadOnly', 'create: default fieldType is ReadOnly');
 is($newProfileField2->get('label'), q|WebGUI::International::get('webgui','WebGUI')|, 'getting raw label');
 is($newProfileField2->getLabel, 'WebGUI', 'getLabel will process safeEval calls for i18n');
+$newProfileField->delete;
+$newProfileField2->delete;
+
+$newProfileField = WebGUI::ProfileField->create($session, 'space field', {
+    fieldType => 'Float',
+    label     => 'Space Field',
+});
+is $newProfileField, undef, 'create returns undef if the field name contains white space';
 
 ###########################################################
 #
@@ -174,13 +212,38 @@ is ($newProfileField3->get('required'), 0, '... required = 0');
 $newProfileField3->set({ required => 1});
 is ($newProfileField3->get('required'), 1, 'set required = 1');
 is ($newProfileField3->get('editable'), 1, '... editable = 1');
+$newProfileField3->delete;
 
-#----------------------------------------------------------------------------
-# Cleanup
-END {
-    $newProfileField->delete;
-    $newProfileField2->delete;
-    $newProfileField3->delete;
+###########################################################
+#
+# form fields, extras, form properties
+#
+###########################################################
+
+my $extra_field = WebGUI::ProfileField->create($session, 'textual',
+    {
+        label     => 'Textual',
+        fieldName => 'Textual',
+        extras    => q|class="texted"|,
+    }
+);
+
+is $extra_field->get('extras'), q|class="texted"|, 'extras set on field creation';
+is $extra_field->formProperties->{extras}, q|class="texted"|, 'extras available from formProperties';
+
+$extra_field->delete;
+
+sub installPigLatin {
+    use File::Copy;
+	mkdir File::Spec->catdir(WebGUI::Test->lib, 'WebGUI', 'i18n', 'PigLatin');
+	copy( 
+		WebGUI::Test->getTestCollateralPath('WebGUI.pm'),
+		File::Spec->catfile(WebGUI::Test->lib, qw/WebGUI i18n PigLatin WebGUI.pm/)
+	);
+	copy(
+		WebGUI::Test->getTestCollateralPath('PigLatin.pm'),
+		File::Spec->catfile(WebGUI::Test->lib, qw/WebGUI i18n PigLatin.pm/)
+	);
 }
 
 

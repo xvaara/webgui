@@ -19,6 +19,7 @@ use DateTime;
 use DateTime::Format::Strptime;
 use DateTime::Format::Mail;
 use DateTime::TimeZone;
+use Scalar::Util qw( weaken );
 use Tie::IxHash;
 use WebGUI::International;
 use WebGUI::Utility;
@@ -298,8 +299,11 @@ A string representing the output format for the date. Defaults to '%z %Z'. You c
 =cut
 
 sub epochToHuman {
-	my $self = shift;
-	my $epoch = shift || time();
+	my $self  = shift;
+	my $epoch = shift;
+    if (!defined $epoch || $epoch eq '') {
+        $epoch = time();
+    }
 	my $i18n = WebGUI::International->new($self->session);
 	my $language = $i18n->getLanguage($self->session->user->profileField('language'));
 	my $locale = $language->{languageAbbreviation} || 'en';
@@ -321,7 +325,7 @@ sub epochToHuman {
 		"d" => "d",
 		"D" => "_varday_",
 		"h" => "I",
-		"H" => "l",
+		"H" => "_varhour_",
 		"j" => "H",
 		"J" => "k",
 		"m" => "m",
@@ -347,11 +351,15 @@ sub epochToHuman {
 	$output = $dt->strftime($output);
 	
   #--- %M
-	$temp = int($dt->month);
+	$temp = $dt->month;
 	$output =~ s/\%_varmonth_/$temp/g;
   #-- %D
-	$temp = int($dt->day);
+	$temp = $dt->day;
 	$output =~ s/\%_varday_/$temp/g;
+  #-- %H, variable digit hour, 12 hour clock
+	$temp = $dt->hour;
+    $temp -= 12 if ($temp > 12); 
+	$output =~ s/\%_varhour_/$temp/g;
   #--- return
 	return $output;
 }
@@ -805,7 +813,9 @@ A reference to the current session.
 sub new {
 	my $class = shift;
 	my $session = shift;
-	bless {_session=>$session}, $class;
+	my $self = bless {_session=>$session}, $class;
+        weaken( $self->{_session} );
+        return $self;
 }
 
 #-------------------------------------------------------------------

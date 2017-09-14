@@ -16,15 +16,20 @@ use lib "$FindBin::Bin/../lib";
 
 use WebGUI::Test;
 use WebGUI::Session;
-use Test::More tests => 16; # increment this value for each test you create
+use Test::More tests => 21; # increment this value for each test you create
+use Test::Exception;
 use WebGUI::Asset::Snippet;
 
 my $session = WebGUI::Test->session;
 my $node = WebGUI::Asset->getImportNode($session);
 my $versionTag = WebGUI::VersionTag->getWorking($session);
 $versionTag->set({name=>"Snippet Test"});
-WebGUI::Test->tagsToRollback($versionTag);
+addToCleanup($versionTag);
 my $snippet = $node->addChild({className=>'WebGUI::Asset::Snippet'});
+
+# Make sure TemplateToolkit is in the config file
+WebGUI::Test->originalConfig( 'templateParsers' );
+$session->config->addToArray( 'templateParsers' => 'WebGUI::Asset::Template::TemplateToolkit' );
 
 # Test for a sane object type
 isa_ok($snippet, 'WebGUI::Asset::Snippet');
@@ -32,7 +37,7 @@ isa_ok($snippet, 'WebGUI::Asset::Snippet');
 # Test to see if we can set values
 my $properties = {
 	cacheTimeout => 124,
-	processAsTemplate => 1,
+	templateParser => 'WebGUI::Asset::Template::HTMLTemplate',
 	mimeType => 'text/plain',
 	snippet => "Gooey's milkshake brings all the girls to the yard...",
 };
@@ -73,9 +78,9 @@ isnt ($editOutput, undef, 'www_edit returns something');
 
 $snippet->update({
     title   => "authMethod",
-    processAsTemplate => 1,
+    templateParser => 'WebGUI::Asset::Template::TemplateToolkit',
     cacheTimeout      => 1,
-    snippet => q|^SQL(select value from settings where name="<tmpl_var title>");|
+    snippet => q|^SQL(select value from settings where name="[% title %]");|
 });
 
 WebGUI::Test->originalConfig('macros');
@@ -85,6 +90,43 @@ is($snippet->view(), 'WebGUI', 'Interpolating macros in works with template in t
 
 my $empty = $node->addChild( { className => 'WebGUI::Asset::Snippet', } );
 is($empty->www_view, 'empty', 'www_view: snippet with no content returns "empty"');
+
+#----------------------------------------------------------------------
+#Check caching
+
+##Set up the snippet to do caching
+$snippet->update({
+    cacheTimeout   => 100,
+    snippet        => 'Cache test: ^#;',
+});
+
+$versionTag->commit;
+
+is $snippet->view, 'Cache test: 1', 'validate snippet content and set cache';
+$session->user({userId => 3});
+is $snippet->view(1), 'Cache test: 3', 'receive uncached content since view was passed the webMethod flag';
+
+#----------------------------------------------------------------------
+#Check packing
+
+my $snippet2 = $node->addChild({className => 'WebGUI::Asset::Snippet'});
+my $tag2 = WebGUI::VersionTag->getWorking($session);
+$snippet2->update({mimeType => 'text/javascript'});
+$tag2->commit;
+addToCleanup($tag2);
+
+open my $JSFILE, WebGUI::Test->getTestCollateralPath('jquery.js')
+    or die "Unable to open jquery test collateral file: $!";
+my $jquery;
+{
+    undef $/;
+    $jquery = <$JSFILE>;
+};
+close $JSFILE;
+
+is $snippet2->get('snippetPacked'), undef, 'no packed content';
+lives_ok { $snippet2->update({snippet => $jquery}); } 'did not die during packing jquery';
+ok $snippet2->get('snippetPacked'), 'snippet content was packed';
 
 TODO: {
     local $TODO = "Tests to make later";

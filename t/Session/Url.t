@@ -52,7 +52,7 @@ my @getRefererUrlTests = (
 
 use Test::More;
 use Test::MockObject::Extends;
-plan tests => 81 + scalar(@getRefererUrlTests);
+plan tests => 87 + scalar(@getRefererUrlTests);
 
 my $session = WebGUI::Test->session;
 
@@ -85,7 +85,7 @@ is( $url2, $url.'?a=b;c=d', 'append second pair');
 #
 #######################################
 
-my $gateway = $session->config->get('gateway');
+WebGUI::Test->originalConfig('gateway');
 $session->config->set('gateway', '/');
 
 is( $session->config->get('gateway'), '/', 'Set gateway for downstream tests');
@@ -130,11 +130,9 @@ $session->setting->set(preventProxyCache => $preventProxyCache );
 my $setting_hostToUse = $session->setting->get('hostToUse');
 $session->setting->set('hostToUse', 'HTTP_HOST');
 my $sitename = $session->config->get('sitename')->[0];
+WebGUI::Test->originalConfig('webServerPort');
+$session->config->delete('webServerPort');
 is( $session->url->getSiteURL, 'http://'.$sitename, 'getSiteURL from config as http_host');
-my $config_port;
-if ($session->config->get('webServerPort')) {
-	$config_port = $session->config->get('webServerPort');
-}
 
 $session->url->setSiteURL('http://webgui.org');
 is( $session->url->getSiteURL, 'http://webgui.org', 'override config setting with setSiteURL');
@@ -154,7 +152,7 @@ $mockEnv{HTTP_HOST} = "devsite.com";
 $session->url->setSiteURL(undef);
 is( $session->url->getSiteURL, 'http://'.$sitename, 'getSiteURL where requested host is not a configured site');
 
-my @config_sitename = @{ $session->config->get('sitename') };
+WebGUI::Test->originalConfig('sitename');
 $session->config->addToArray('sitename', 'devsite.com');
 $session->url->setSiteURL(undef);
 is( $session->url->getSiteURL, 'http://devsite.com', 'getSiteURL where requested host is not the first configured site');
@@ -173,19 +171,27 @@ is( $session->url->getSiteURL, 'http://'.$sitename.':8880', 'getSiteURL with a n
 
 $session->url->setSiteURL('http://'.$sitename);
 is( $session->url->getSiteURL, 'http://'.$sitename, 'restore config setting');
-$session->config->set('sitename', \@config_sitename);
 $session->setting->set('hostToUse', $setting_hostToUse);
-if ($config_port) {
-	$session->config->set('webServerPort', $config_port);
-}
-else {
-	$session->config->delete('webServerPort');
-}
+
+#######################################
+#
+# makeCompliant
+#
+#######################################
 
 $url  = 'level1 /level2/level3   ';
 $url2 = 'level1-/level2/level3';
-
-is( $session->url->makeCompliant($url), $url2, 'language specific URL compliance');
+is $session->url->makeCompliant($url), $url2, 'internal spaces encoded, trailing spaces removed';
+is $session->url->makeCompliant('home/'), 'home', '... trailing slashes removed';
+is $session->url->makeCompliant('home is where the heart is'), 'home-is-where-the-heart-is', '... makeCompliant translates spaces to dashes';
+is $session->url->makeCompliant('/home'), 'home', '... removes initial slash';
+is $session->url->makeCompliant('home -- here'),             'home-here', 'multiple dashes collapsed';
+is $session->url->makeCompliant('home!@#$%^&*here'),         'home-here', 'non-word characters collapsed to single dash';
+is $session->url->makeCompliant("home\x{2267}here"),         'home-here', 'non-word international characters removed';
+is $session->url->makeCompliant("home\x{1EE9}here"),         "home\x{1EE9}here", 'word international characters not removed';
+my $character = "\x{00C0}";
+utf8::upgrade($character);
+is( $session->url->makeCompliant($character), $character, 'utf8 allowed in URLs');
 
 
 #######################################
@@ -215,6 +221,13 @@ is($session->url->getRequestedUrl, 'path1/file1', 'getRequestedUrl, check cache 
 $session->url->{_requestedUrl} = undef;  ##Manually clear cached value
 $pseudoRequest->uri('/path2/file2?param1=one;param2=two');
 is($session->url->getRequestedUrl, 'path2/file2', 'getRequestedUrl, does not return params');
+
+$session->url->{_requestedUrl} = undef;
+my $utf8_url = "Viel Spa\x{00DF}";
+$pseudoRequest->uri($utf8_url);
+use Encode;
+my $decoded_url = decode_utf8($utf8_url);
+is $session->url->getRequestedUrl(), $decoded_url, 'getRequestedUrl returns utf8 decoded data';
 
 #######################################
 #
@@ -281,14 +294,10 @@ is($session->url->makeAbsolute('page1'), '/page1', 'makeAbsolute: default baseUr
 #
 #######################################
 
-my $origExtras = $session->config->get('extrasURL');
-my $extras  = $origExtras;
+my $extras  = WebGUI::Test->originalConfig('extrasURL');
 
-my $savecdn = $session->config->get('cdn');
-if ($savecdn) {
-    $session->config->delete('cdn');
-}
-# Note: the CDN configuration will be reverted in the END
+WebGUI::Test->originalConfig('cdn');
+$session->config->delete('cdn');
 
 is($session->url->extras, $extras.'/', 'extras method returns URL to extras with a trailing slash');
 is($session->url->extras('foo.html'), join('/', $extras,'foo.html'), 'extras method appends to the extras url');
@@ -330,11 +339,6 @@ is($session->url->extras('/dir1/foo.html'), join('', $cdnCfg->{extrasSsl}, 'dir1
    'extras using extrasSsl with SSLPROXY');
 delete $mockEnv{SSLPROXY};
 
-$session->config->set('extrasURL', $origExtras);
-
-# partial cleanup here; complete cleanup in END block
-$session->config->delete('cdn');
-
 #######################################
 #
 # escape and unescape
@@ -343,11 +347,11 @@ $session->config->delete('cdn');
 #
 #######################################
 
-my $escapeString = '10% is enough!';
+my $escapeString = '10% is enough;';
 my $escapedString = $session->url->escape($escapeString);
 my $unEscapedString = $session->url->unescape($escapeString);
-is($escapedString, '10%25%20is%20enough!', 'escape method');
-is($unEscapedString, '10% is enough!', 'unescape method');
+is($escapedString, '10%25%20is%20enough%3B', 'escape method');
+is($unEscapedString, '10% is enough;', 'unescape method');
 
 #######################################
 #
@@ -359,13 +363,10 @@ is($unEscapedString, '10% is enough!', 'unescape method');
 #######################################
 
 is($session->url->urlize('HOME/PATH1'), 'home/path1', 'urlize: urls are lower cased');
-is($session->url->urlize('home/'), 'home', '... trailing slashes removed');
-is($session->url->urlize('home is where the heart is'), 'home-is-where-the-heart-is', '... makeCompliant translates spaces to dashes');
-is($session->url->urlize('/home'), 'home', '... removes initial slash');
-is($session->url->urlize('home/../out-of-bounds'),    'home/out-of-bounds', '... removes multiple ../');
-is($session->url->urlize('home/./here'),              'home/here', '... removes multiple ./');
-is($session->url->urlize('home/../../out-of-bounds'), 'home/out-of-bounds', '... removes multiple ../');
-is($session->url->urlize('home/././here'),            'home/here', '... removes multiple ./');
+is $session->url->urlize('home/../out-of-bounds'),    'home/out-of-bounds', '... removes ../';
+is $session->url->urlize('home/./here'),              'home/here', '... removes ./';
+is $session->url->urlize('home/../../out-of-bounds'), 'home/out-of-bounds', '... removes multiple ../';
+is $session->url->urlize('home/././here'),            'home/here', '... removes multiple ./';
 
 #######################################
 #
@@ -413,6 +414,7 @@ TODO: {
 }
 
 my $versionTag = WebGUI::VersionTag->getWorking($session);
+WebGUI::Test->addToCleanup($versionTag);
 my $statefulAsset = WebGUI::Asset->getRoot($session)->addChild({ className => 'WebGUI::Asset::Snippet' });
 $versionTag->commit;
 $session->asset( $statefulAsset );
@@ -444,7 +446,7 @@ is(
 #
 #######################################
 
-my $origSSLEnabled = $session->config->get('sslEnabled');
+WebGUI::Test->originalConfig('sslEnabled');
 
 ##Test all the false cases, first
 
@@ -488,26 +490,3 @@ ok($session->url->forceSecureConnection(), 'forced secure connection with no url
 ok($session->http->isRedirect, '... and redirect status code was set');
 is($session->http->getRedirectLocation, $secureUrl, '... and redirect status code was set');
 
-$session->config->set('sslEnabled', $origSSLEnabled);
-
-END {  ##Always clean-up
-	$session->asset($sessionAsset);
-	$versionTag->rollback if defined $versionTag;
-
-	$session->config->set('sitename',           \@config_sitename);
-    $session->config->set('gateway',            $gateway);
-    $session->config->set('extrasURL',          $origExtras);
-    $session->config->set('sslEnabled',         $origSSLEnabled) if defined $origSSLEnabled;
-
-	if ($config_port) {
-		$session->config->set($config_port);
-	}
-	else {
-		$session->config->delete('webServerPort');
-	}
-	if ($savecdn) {
-	   $session->config->set('cdn', $savecdn);
-	} else {
-	   $session->config->delete('cdn');
-	}
-}

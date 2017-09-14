@@ -21,8 +21,8 @@ our $I18N = {
 	},
 
 	'keywords help' => {
-		message => q|Add some keywords here for this asset. They'll automatically be added to the search index, and as the keywords metatag.|,
-		lastUpdated => 0,
+		message => q|Keywords are automatically added to the keywords metatag for this asset, and are also put into the WebGUI search index.  Multiple keywords should be separated by commas.|,
+		lastUpdated => 1262117316,
 		context => q|help for the keywords property|
 	},
 
@@ -320,6 +320,11 @@ our $I18N = {
 		context => q|To remove an item from the clipboard, and put it on the current page.|
 	},
 
+    'Copy Assets' => {
+        message => q|Copy Assets|,
+        lastUpdated => 1273518396,
+    },
+
 	'Paste Assets' => {
 		message => q|Paste Assets|,
 		lastUpdated => 1245342798,
@@ -343,10 +348,22 @@ our $I18N = {
 		context => q|To skip, to move over, to not process|
 	},
 
+	'Processing form data' => {
+		message => q|Processing form data|,
+		lastUpdated => 1245343280,
+		context => q|To edit or change|
+	},
+
 	'editing %s' => {
 		message => q|editing %s|,
 		lastUpdated => 1245343280,
 		context => q|To edit or change|
+	},
+
+	'Attempting to commit changes' => {
+		message => q|Attempting to commit changes|,
+		lastUpdated => 1245343280,
+		context => q||,
 	},
 
 	'this asset only' => {
@@ -561,7 +578,7 @@ throughout the site.  Check yes if you want this Asset to be available as a pack
 	'asset' => {
 		message => q|Asset|,
         	lastUpdated => 1100463645,
-		context => 'The default name of all assets.'
+		context => 'The default name of all assets.  Asset, as in resource, part, object, item, or piece'
 	},
 
 	'extra head tags' => {
@@ -791,6 +808,15 @@ case of the check box list, then enter one per line.  The total amount of data i
                      context => q|Field label for the Export Page operation|,
                      message => q|Depth|,
                    },
+        'Export Related Assets' => {
+                     lastUpdated => 1301501028,
+                     context => q|Field label for the Export Page operation|,
+                     message => q|Export Related Assets|,
+                   },
+        'Export Related Assets description' => {
+                     lastUpdated => 1301501028,
+                     message => q|Include related assets in export?|,
+                   },
         '964' => {
                    lastUpdated => 1052850265,
                    message => q|Manage system trash.|,
@@ -998,7 +1024,6 @@ Couldn't open %-s because %-s <br />
 <dd>The new URL will be based on the Asset's present URL.</dd>
 </dl>
 </div>
-<p>New URLs will be passed through the makeUrlCompliant function that is specific to the default language for your site.</p>
 |,
 		lastUpdated => 0,
 	},
@@ -1086,6 +1111,16 @@ Couldn't open %-s because %-s <br />
 	'asset template asset var title' => {
 	    message => q|Asset Template Asset Variables|,
 	    lastUpdated => 1100463645,
+	},
+
+	'assetId' => {
+		message => q|The unique identifier for this Asset, in base64 encoding.|,
+		lastUpdated => 1256327617,
+	},
+
+	'assetIdHex' => {
+		message => q|The unique identifier for this Asset, in hexadecimal format.|,
+		lastUpdated => 1256327617,
 	},
 
 	'title' => {
@@ -1244,6 +1279,12 @@ Couldn't open %-s because %-s <br />
         context     => q{Error message in Asset.pm},
     },
 
+    'clear package flag' => {
+        message     => q{Clear package flag},
+        lastUpdate  => 1275419384,
+        context     => q{Package import option in admin console},
+    },
+
     'need a userId parameter' => {
         message     => q{need a userId parameter},
         lastUpdated => 0,
@@ -1370,6 +1411,20 @@ Couldn't open %-s because %-s <br />
         context     => q{},
     },
 
+    'Any Class' => {
+        message     => q{Any Class},
+        lastUpdated => 0,
+        context     => q{Class, as in name of class, or type of asset},
+    },
+
+    'Allowed Classes' => {
+        message     => 'Allowed Classes',
+        lastUpdated => 1295986062,
+    },
+    'Allowed Classes hoverHelp' => {
+        message     => 'Which assets use this metadata?',
+        lastUpdated => 1295986062,
+    }
 };
 
 1;

@@ -597,6 +597,12 @@ our $I18N = {
 		lastUpdated => 1109696029,
 	},
 
+	'Unsubscribe from %s' => {
+		message => q|Unsubscribe from %s|,
+		lastUpdated => 1274216526,
+        context     => q|Label for the unsubscribe form.  %s will be filled in with the title of the CS.|,
+	},
+
 	'url' => {
 		message => q|URL|,
 		lastUpdated => 1109696029,
@@ -1057,6 +1063,31 @@ our $I18N = {
 		lastUpdated => 1150169038,
 	},
 
+	'transferkarma.label' => {
+		message => q|The phrase "Transfer Karma".|,
+		lastUpdated => 1150169038,
+	},
+
+	'karmascale.label' => {
+		message => q|The phrase "Karma Scale".|,
+		lastUpdated => 1150169038,
+	},
+
+	'karmaRank.label' => {
+		message => q|The phrase "Karma Rank".|,
+		lastUpdated => 1150169038,
+	},
+
+	'captcha_label' => {
+		message => q|The word "Captcha".|,
+		lastUpdated => 1150169038,
+	},
+
+	'keywords.label' => {
+		message => q|The word "Keywords".|,
+		lastUpdated => 1150169038,
+	},
+
         'display last reply description' => {
                 message => q|If set to Yes, template variables will be added to allow the display of the last reply in this Thread.|,
                 lastUpdated => 1165449294,
@@ -1160,10 +1191,8 @@ submitted by a user.|,
         },
 
         'sort by description' => {
-                message => q|By default, all posts are displayed in a sorted order.  Use this
-field to choose by what property they are sorted.  Multiple properties
-may be selected.|,
-                lastUpdated => 1119070429,
+                message => q|By default, all posts are displayed in a sorted order.  Use this field to choose by what property they are sorted.|,
+                lastUpdated => 1275922704,
         },
 
         'sort order description' => {
@@ -1404,6 +1433,12 @@ user has an avatar.|,
 		lastUpdated => 1149655833,
 	},
 
+	'user.canStartThread' => {
+		message => q|A conditional that is true if the current user can add Threads to this Collaboration Asset.|,
+		lastUpdated => 1149655833,
+        context => q|Template variable help|,
+	},
+
 	'displayLastReply' => {
 		message => q|A conditional that is true if the Collaboration System was configured to display the last reply.  If this variable is true, then in the Collaboration Template, the lastReply.* variables will be enabled.|,
 		lastUpdated => 1149655833,
@@ -1510,8 +1545,18 @@ the Collaboration Asset, the user will be notified.|,
 		lastUpdated => 1149655909,
 	},
 
+	'form.footer' => {
+		message => q|HTML required to end the search form.|,
+		lastUpdated => 1149655909,
+	},
+
 	'back.url' => {
 		message => q|A URL for returning to the main view for this Collaboration Asset.|,
+		lastUpdated => 1149655909,
+	},
+
+	'doit' => {
+		message => q|A boolean that is true if a search has just been submitted|,
 		lastUpdated => 1149655909,
 	},
 
@@ -1535,125 +1580,39 @@ the Collaboration Asset, the user will be notified.|,
 		lastUpdated => 1180759724,
 	},
 
-	'collaboration rss template title' => {
-		message => q|Collaboration RSS Template Variables|,
-		lastUpdated => 1184905545,
-	},
-
-	'feed title' => {
-		message => q|The title of the rss feed (comes from the collaboration title).|,
-		lastUpdated => 1149656056,
-	},
-
-	'collab link' => {
-		message => q|The url to the collaboration.|,
-		lastUpdated => 1149656056,
-	},
-
-	'feed description' => {
-		message => q|The description of the rss feed (comes from the collaboration synopsis).|,
-		lastUpdated => 1216913516,
-	},
-
-	'generator' => {
-		message => q|The program used to generate the rss feed, i.e. WebGUI plus version information. (optional field)|,
-		lastUpdated => 1149656056,
-	},
-
-	'webMaster' => {
-		message => q|The email address of the person responsible for the technical issues relating to this rss feed. (optional field)|,
-		lastUpdated => 1149656056,
-	},
-
-	'docs' => {
-		message => q|The url of documentation about the format of this file, RSS 2.0 (optional field)|,
-		lastUpdated => 1149656056,
-	},
-
-	'lastBuildDate' => {
-		message => q|The date that this feed was last updated. (optional field)|,
-		lastUpdated => 1149656056,
-	},
-
-	'item_loop' => {
-		message => q|Loops over the posts to be transmitted in this RSS feed.|,
-		lastUpdated => 1149656056,
-	},
-
-	'author' => {
-		message => q|The username of the person who submitted the post.|,
-		lastUpdated => 1149656056,
-	},
-
-	'post title' => {
-		message => q|The title of the item (post).|,
-		lastUpdated => 1149656056,
-	},
-
-	'full text link' => {
-		message => q|The url to the full text of the item.|,
-		lastUpdated => 1149656056,
-	},
-
-	'item description' => {
-		message => q|A synopsis of the item.|,
-		lastUpdated => 1149656056,
-	},
-
-	'guid' => {
-		message => q|A unique identifier for this item.|,
-		lastUpdated => 1149656056,
-	},
-
-	'pubDate' => {
-		message => q|The date the item was published.|,
-		lastUpdated => 1149656056,
-	},
-
-	'epochDate' => {
-		message => q|The date the item was published as an epoch date so that the Date macro can be used for custom date formatting.|,
-		lastUpdated => 1222106027,
-	},
-
-	'attachmentLoop' => {
-		message => q|A loop containg all attachements to this item (post).|,
-		lastUpdated => 1149656056,
-	},
-
-	'attachment_thumbnail' => {
-		message => q|The URL to the thumbnail for this attachment.  Files will be represented by an
-		icon depending on their type.  Images will have a true thumbnail.|,
-		lastUpdated => 1169747804,
-	},
-
-	'attachment.url' => {
-		message => q|The URL to this attachment.|,
-		lastUpdated => 1149656056,
-	},
-
-	'attachment.path' => {
-		message => q|The path in the filesystem to this attachment.|,
-		lastUpdated => 1149656056,
-	},
-
-	'attachment.length' => {
-		message => q|The length in this attachment, in bytes.|,
-		lastUpdated => 1149656056,
-	},
-
 	'collaborationAssetId' => {
 		message => q|The assetId of this Collaboration System.  Unlike the variable assetId, this one will not be overridden by the assetIds inside of Threads or Posts.|,
 		lastUpdated => 1170543345,
 	},
-    
+
     'subscription group label' => {
         message => q|Subscription Group|,
         lastUpdated => 1170543345,
     },
-    
+
     'subscription group hoverHelp' => {
         message => q|Manage the users in the subscription group for this Collaboration System|,
         lastUpdated => 1170543345,
+    },
+
+    'unsubscribe template' => {
+        message => q|Unsubscribe Template|,
+        lastUpdated => 1274208100,
+    },
+
+    'unsubscribe template hoverHelp' => {
+        message => q|Choose a template to help a user, who is not logged in, unsubscribe from either the CS or from a Thread within it.|,
+        lastUpdated => 1274208493,
+    },
+
+    'unsubscribe instructions' => {
+        message => q|Please enter in the email address of the user who wants to unsubscribe|,
+        lastUpdated => 1274208493,
+    },
+
+    'no user email error message' => {
+        message => q|No user with that email can be found.|,
+        lastUpdated => 1274208493,
     },
 
     'group to edit label' => {
@@ -1661,10 +1620,10 @@ the Collaboration Asset, the user will be notified.|,
         lastUpdated => 1206733328,
     },
     'group to edit hoverhelp' => {
-        message => q|Group to Edit Posts|,
-        lastUpdated => 1206733328,
+        message => q|A group that is allowed to edit posts after they have been submitted.|,
+        lastUpdated => 1269283819,
     },
-    
+
     'use captcha label' => {
         message => q|Use Post Captcha|,
         lastUpdated => 1170543345,
@@ -1674,7 +1633,7 @@ the Collaboration Asset, the user will be notified.|,
         message => q|Choose whether or not to make users verify their humnanity before being able to post to this collaboration system|,
         lastUpdated => 1170543345,
     },
-    
+
     'captcha label' => {
         message => q|Verify your humanity|,
         lastUpdated => 1170543345,
@@ -1696,7 +1655,7 @@ the Collaboration Asset, the user will be notified.|,
         message => q|Keywords|,
         lastUpdated => 1170543345,
     },
-    
+
     'asset not committed' => {
 		message => q{<h1>Error!</h1><p>You need to commit this collaboration system before you can create a new thread</p>},
         lastUpdated => 1166848379,
@@ -1734,6 +1693,126 @@ the Collaboration Asset, the user will be notified.|,
         message => q|has posted to one of your subscriptions|,
         context => q|i18n label for the notification template.  "user" has posted..|,
         lastUpdated => 1229910435,
+    },
+
+    'unarchive all' => {
+        message     => q{Unarchive All Threads},
+        context     => q{Label for link to unarchive all threads},
+        lastUpdated => 0,
+    },
+
+    'unarchive confirm' => {
+        message     => q{Are you sure? Any threads past the 'Archive After' interval will be re-archived.},
+        context     => q{Text for pop-up dialog to confirm unarchive all threads},
+        lastUpdated => 0,
+    },
+
+    'unsubscribe formHeader' => {
+        message     => q{HTML code to start the unsubscribe form.},
+        context     => q{Template variable help},
+        lastUpdated => 0,
+    },
+
+    'unsubscribe formFooter' => {
+        message     => q{HTML code to end the unsubscribe form.},
+        context     => q{Template variable help},
+        lastUpdated => 0,
+    },
+
+    'unsubscribe formSubmit' => {
+        message     => q{A button to submit the form.},
+        context     => q{Template variable help},
+        lastUpdated => 0,
+    },
+
+    'unsubscribe formEmail' => {
+        message     => q{A text form with email completion.},
+        context     => q{Template variable help},
+        lastUpdated => 0,
+    },
+
+    'unsubscribe formMessage' => {
+        message     => q{Internationalized messages to tell the user about errors and successes.},
+        context     => q{Template variable help},
+        lastUpdated => 0,
+    },
+
+    'You have been unsubscribed' => {
+        message     => q{You have been unsubscribed.},
+        context     => q{status message},
+        lastUpdated => 0,
+    },
+
+    'collaboration unsubscribe template title' => {
+        message     => q{Collaboration System Unsubscribe Template},
+        context     => q{status message},
+        lastUpdated => 0,
+    },
+
+    'every minute' => {
+        message     => q{Every minute},
+        context     => q{label in the asset edit form},
+        lastUpdated => 0,
+    },
+
+    'every other minute' => {
+        message     => q{Every other minute},
+        context     => q{label in the asset edit form},
+        lastUpdated => 0,
+    },
+
+    'every 5 minutes' => {
+        message     => q{Every 5 minutes},
+        context     => q{label in the asset edit form},
+        lastUpdated => 0,
+    },
+
+    'every 10 minutes' => {
+        message     => q{Every 10 minutes},
+        context     => q{label in the asset edit form},
+        lastUpdated => 0,
+    },
+
+    'every 15 minutes' => {
+        message     => q{Every 15 minutes},
+        context     => q{label in the asset edit form},
+        lastUpdated => 0,
+    },
+
+    'every 20 minutes' => {
+        message     => q{Every 20 minutes},
+        context     => q{label in the asset edit form},
+        lastUpdated => 0,
+    },
+
+    'every 30 minutes' => {
+        message     => q{Every 30 minutes},
+        context     => q{label in the asset edit form},
+        lastUpdated => 0,
+    },
+
+    'every hour' => {
+        message     => q{Every hour},
+        context     => q{label in the asset edit form},
+        lastUpdated => 0,
+    },
+
+    'every other hour' => {
+        message     => q{Every other hour},
+        context     => q{label in the asset edit form},
+        lastUpdated => 0,
+    },
+
+    'once per day' => {
+        message     => q{Once per day},
+        context     => q{label in the asset edit form},
+        lastUpdated => 0,
+    },
+
+    'View this message on the website' => {
+        message     => q{View this message on the website},
+        context     => q{label in the default notification email template},
+        lastUpdated => 0,
     },
 
 };

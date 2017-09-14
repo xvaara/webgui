@@ -10,14 +10,16 @@
 # http://www.plainblack.com                     info@plainblack.com
 #-------------------------------------------------------------------
 
-our ($webguiRoot);
+use strict;
+use File::Basename ();
+use File::Spec;
 
+my $webguiRoot;
 BEGIN {
-        $webguiRoot = "..";
-        unshift (@INC, $webguiRoot."/lib");
+    $webguiRoot = File::Spec->rel2abs(File::Spec->catdir(File::Basename::dirname(__FILE__), File::Spec->updir));
+    unshift @INC, File::Spec->catdir($webguiRoot, 'lib'), File::Spec->catdir($webguiRoot, 'lib/plebgui_mock') ;
 }
 
-use strict;
 use Cwd ();
 use File::Path ();
 use Getopt::Long ();
@@ -142,10 +144,10 @@ foreach my $filename (keys %{$configs}) {
 			unless ($skipDelete) {
 				print "\tDeleting temp files.\n" unless ($quiet);
 				my $path = $configs->{$filename}->get("uploadsPath").$slash."temp";
-				File::Path::rmtree($path) unless ($path eq "" || $path eq "/" || $path eq "/data");
+				File::Path::rmtree($path, {keep_root => 1, }) unless ($path eq "" || $path eq "/" || $path eq "/data");
 				print "\tDeleting file cache.\n" unless ($quiet);
 				$path = $configs->{$filename}->get("fileCacheRoot")||"/tmp/WebGUICache";
-				File::Path::rmtree($path)  unless ($path eq "" || $path eq "/" || $path eq "/data");
+				File::Path::rmtree($path, {keep_root => 1, })  unless ($path eq "" || $path eq "/" || $path eq "/data");
 			}
 		}
 		$session->close();
@@ -269,7 +271,9 @@ foreach my $filename (keys %config) {
     chdir($currentPath);
 	my $session = WebGUI::Session->open($webguiRoot,$filename);
 	print "\tSetting site upgrade completed..." unless ($quiet);
-	$session->setting->remove('specialState');
+    unless ($skipMaintenance) {
+        $session->setting->remove('specialState');
+    }
 	$session->close();
 	print "OK\n" unless ($quiet);
 }

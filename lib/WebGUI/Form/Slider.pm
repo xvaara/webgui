@@ -123,7 +123,7 @@ Returns the form element used for manual input. You must overload this method.
 sub getInputElement {
 	my $self = shift;
 
-	$self->session->errorHandler->fatal("Subclasses of WebGUI::Form::Session must overload getInputElement");
+	$self->session->errorHandler->fatal("Subclasses of WebGUI::Form::Slider must overload getInputElement");
 }
 
 #-------------------------------------------------------------------
@@ -174,7 +174,7 @@ from this class. For instance WebGUI::Form::SelectSlider.
 sub getOnChangeInputElement {
 	my $self = shift;
 
-	$self->session->errorHandler->fatal("Subclasses of WebGUI::Form::Session must overload getOnChangeInputElement");
+	$self->session->errorHandler->fatal("Subclasses of WebGUI::Form::Slider must overload getOnChangeInputElement");
 }
 
 #-------------------------------------------------------------------
@@ -195,7 +195,7 @@ from this class. For instance WebGUI::Form::SelectSlider.
 sub getOnChangeSlider {
 	my $self = shift;
 	
-	$self->session->errorHandler->fatal("Subclasses of WebGUI::Form::Session must overload getOnChangeSlider");
+	$self->session->errorHandler->fatal("Subclasses of WebGUI::Form::Slider must overload getOnChangeSlider");
 }
 
 #-------------------------------------------------------------------
@@ -259,6 +259,22 @@ sub getSliderVariable {
 
 #-------------------------------------------------------------------
 
+=head2 headTags ( )
+
+Set the head tags for this form plugin
+
+=cut
+
+sub headTags {
+    my $self = shift;
+	$self->session->style->setScript($self->session->url->extras("slider/js/range.js"), {type=>"text/javascript"});
+	$self->session->style->setScript($self->session->url->extras("slider/js/timer.js"), {type=>"text/javascript"});
+	$self->session->style->setScript($self->session->url->extras("slider/js/slider.js"), {type=>"text/javascript"});
+	$self->session->style->setLink($self->session->url->extras("slider/css/bluecurve/bluecurve.css"), {rel=>"stylesheet", type=>"text/css"});
+}
+
+#-------------------------------------------------------------------
+
 =head2 toHtml ( )
 
 Renders an input tag of type text.
@@ -267,10 +283,6 @@ Renders an input tag of type text.
 
 sub toHtml {
 	my $self = shift;
-	$self->session->style->setScript($self->session->url->extras("slider/js/range.js"), {type=>"text/javascript"});
-	$self->session->style->setScript($self->session->url->extras("slider/js/timer.js"), {type=>"text/javascript"});
-	$self->session->style->setScript($self->session->url->extras("slider/js/slider.js"), {type=>"text/javascript"});
-	$self->session->style->setLink($self->session->url->extras("slider/css/bluecurve/bluecurve.css"), {rel=>"stylesheet", type=>"text/css"});
 
 	# We need to make the variables unique because javascript does not have block scope. Also js cannot 
 	# have dashes in identifiers, so we convert those to dollars, which are allowed in identifiers.
@@ -337,6 +349,7 @@ sub toHtml {
 	|;
 	$output .= '</script>';
 
+    $self->headTags;
 	return $output;
 }
 

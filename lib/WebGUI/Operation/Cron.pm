@@ -294,21 +294,27 @@ sub www_runCronJob {
                     if ($session->stow->get('singletonWorkflowClash')) {
                         $session->errorHandler->warn( 
                             "Could not create workflow instance for workflowId '" . $task->get( "workflowId" )
-                            . "': It is a singleton workflow and is still running from the last invocation."
+                            . "' from taskId '".$taskId."': It is a singleton workflow and is still running from the last invocation."
                         );
                         return "done";
                     }
                     $session->errorHandler->error( 
                         "Could not create workflow instance for workflowId '" . $task->get( "workflowId" )
-                        . "': The result was undefined"
+                        . "' from taskId '".$taskId."': The result was undefined"
                     );
                     return "done";
                 }
                 
                 # Run the instance
-                $instance->start( 1 );
-		$task->delete( 1 ) if ( $task->get("runOnce") );
-		return "done";
+        my $error = $instance->start( 1 );
+        if ($error) {
+            ##Unable to communicate with spectre.  Delete this instance to it does not get stuck.
+            $session->log->error("Unable to communicate with spectre: $error about taskId: $taskId.  Deleting instanceId: ". $instance->getId);
+            $instance->delete();
+            return "error";
+        }
+        $task->delete( 1 ) if ( $task->get("runOnce") );
+        return "done";
 	}
 	$session->errorHandler->warn("No task ID passed to cron job runner.");
 	return "error";

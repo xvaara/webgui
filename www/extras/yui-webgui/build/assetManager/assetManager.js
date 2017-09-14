@@ -7,13 +7,14 @@
 if ( typeof WebGUI == "undefined" ) {
     WebGUI  = {};
 }
+
 if ( typeof WebGUI.AssetManager == "undefined" ) {
     WebGUI.AssetManager = {};
 }
 
 // Keep track of the open more menus
 WebGUI.AssetManager.MoreMenusDisplayed = {};
-WebGUI.AssetManager.CrumbMoreMenu;
+WebGUI.AssetManager.CrumbMoreMenu = undefined;
 // Append something to a url:
 WebGUI.AssetManager.appendToUrl = function ( url, params ) {
     var components = [ url ];
@@ -25,15 +26,14 @@ WebGUI.AssetManager.appendToUrl = function ( url, params ) {
     }
     components.push(params);
     return components.join(''); 
-}
+};
 
 /*---------------------------------------------------------------------------
     WebGUI.AssetManager.addHighlightToRow ( child )
     Highlight the row containing this element by adding to it the "highlight"
     class
 */
-WebGUI.AssetManager.addHighlightToRow
-= function ( child ) {
+WebGUI.AssetManager.addHighlightToRow = function ( child ) {
     var row     = WebGUI.AssetManager.findRow( child );
     if ( !YAHOO.util.Dom.hasClass( row, "highlight" ) ) {
         YAHOO.util.Dom.addClass( row, "highlight" );
@@ -44,16 +44,15 @@ WebGUI.AssetManager.addHighlightToRow
     WebGUI.AssetManager.buildMoreMenu ( url, linkElement )
     Build a WebGUI style "More" menu for the asset referred to by url
 */
-WebGUI.AssetManager.buildMoreMenu
-= function ( url, linkElement, isNotLocked ) {
+WebGUI.AssetManager.buildMoreMenu = function ( url, linkElement, isNotLocked ) {
     // Build a more menu
     var rawItems    = WebGUI.AssetManager.MoreMenuItems;
     var menuItems   = [];
     var isLocked    = !isNotLocked;
     for ( var i = 0; i < rawItems.length; i++ ) {
-        var itemUrl     = rawItems[i].url.match( /<url>/ )
-                        ? rawItems[i].url.replace( /<url>(?:\?(.*))?/, WebGUI.AssetManager.appendToUrl(url, "$1") )
-                        : url + rawItems[i].url
+        var itemUrl     = rawItems[i].url
+                        ? WebGUI.AssetManager.appendToUrl(url, rawItems[i].url)
+                        : url
                         ;
         if (! (itemUrl.match( /func=edit;/) && isLocked )) {
             menuItems.push( { "url" : itemUrl, "text" : rawItems[i].label } );
@@ -63,7 +62,7 @@ WebGUI.AssetManager.buildMoreMenu
         "zindex"                    : 1000,
         "clicktohide"               : true,
         "position"                  : "dynamic",
-        "context"                   : [ linkElement, "tl", "bl" ],
+        "context"                   : [ linkElement, "tl", "bl", ["beforeShow", "windowResize"] ],
         "itemdata"                  : menuItems
     };
 
@@ -74,8 +73,7 @@ WebGUI.AssetManager.buildMoreMenu
     WebGUI.AssetManager.findRow ( child )
     Find the row that contains this child element.
 */
-WebGUI.AssetManager.findRow
-= function ( child ) {
+WebGUI.AssetManager.findRow = function ( child ) {
     var node    = child;
     while ( node ) {
         if ( node.tagName == "TR" ) {
@@ -85,37 +83,52 @@ WebGUI.AssetManager.findRow
     }
 };
 
+WebGUI.AssetManager.assetActionCache = {};
+
 /*---------------------------------------------------------------------------
     WebGUI.AssetManager.formatActions ( )
     Format the Edit and More links for the row
 */
 WebGUI.AssetManager.formatActions = function ( elCell, oRecord, oColumn, orderNumber ) {
-    if ( oRecord.getData( 'actions' ) ) {
-        elCell.innerHTML 
-            = '<a href="' + WebGUI.AssetManager.appendToUrl(oRecord.getData( 'url' ), 'func=edit;proceed=manageAssets') + '">'
-            + WebGUI.AssetManager.i18n.get('Asset', 'edit') + '</a>'
-            + ' | '
-            ;
-    }
-    else {
-        elCell.innerHTML = "";
-    }
-    var more    = document.createElement( 'a' );
-    elCell.appendChild( more );
-    more.appendChild( document.createTextNode( WebGUI.AssetManager.i18n.get('Asset','More' ) ) );
-    more.href   = '#';
+    var data    = oRecord.getData(),
+        id      = data.assetId,
+        assets  = WebGUI.AssetManager.assetActionCache,
+        asset   = assets[id],
+        edit, more;
 
-    // Delete the old menu
-    if ( document.getElementById( 'moreMenu' + oRecord.getData( 'assetId' ) ) ) {
-        var oldMenu = document.getElementById( 'moreMenu' + oRecord.getData( 'assetId' ) );
-        oldMenu.parentNode.removeChild( oldMenu );
+    elCell.innerHTML = '';
+
+    if (!data.actions) {
+        return;
     }
 
-    var options = WebGUI.AssetManager.buildMoreMenu(oRecord.getData( 'url' ), more, oRecord.getData( 'actions' ));
+    if (!asset) {
+        assets[id] = asset = {};
+        asset.data = data;
+        asset.bar  = document.createTextNode(' | ');
 
-    var menu    = new YAHOO.widget.Menu( "moreMenu" + oRecord.getData( 'assetId' ), options );
-    YAHOO.util.Event.onDOMReady( function () { menu.render( document.getElementById( 'assetManager' ) ) } );
-    YAHOO.util.Event.addListener( more, "click", function (e) { YAHOO.util.Event.stopEvent(e); menu.show(); menu.focus(); }, null, menu );
+        edit = asset.edit = document.createElement('a');
+        edit.href = WebGUI.AssetManager.appendToUrl(
+            data.url, 'func=edit;proceed=manageAssets'
+        );
+        edit.appendChild(document.createTextNode(
+            WebGUI.AssetManager.i18n.get('Asset', 'edit')
+        ));
+
+        more = asset.more = document.createElement('a');
+        more.href = '#';
+        more.appendChild(document.createTextNode(
+            WebGUI.AssetManager.i18n.get('Asset','More')
+        ));
+
+        YAHOO.util.Event.addListener(
+            more, 'click', WebGUI.AssetManager.onMoreClick, asset
+        );
+    }
+
+    elCell.appendChild(asset.edit);
+    elCell.appendChild(asset.bar);
+    elCell.appendChild(asset.more);
 };
 
 /*---------------------------------------------------------------------------
@@ -174,13 +187,20 @@ WebGUI.AssetManager.formatRank = function ( elCell, oRecord, oColumn, orderNumbe
         + 'onchange="WebGUI.AssetManager.selectRow( this )" />';
 };
 
-
 /*---------------------------------------------------------------------------
-    WebGUI.AssetManager.DefaultSortedBy ( )
+    WebGUI.AssetManager.onMoreClick ( event, asset )
+    Event handler for the more menu's click event
 */
-WebGUI.AssetManager.DefaultSortedBy = { 
-    "key"       : "lineage",
-    "dir"       : YAHOO.widget.DataTable.CLASS_ASC
+WebGUI.AssetManager.onMoreClick = function (e, a) {
+    var options, menu = a.menu, d = a.data;
+    YAHOO.util.Event.stopEvent(e);
+    if (!menu) {
+        options = WebGUI.AssetManager.buildMoreMenu(d.url, a.more, d.actions);
+        a.menu = menu = new YAHOO.widget.Menu('assetMenu'+d.assetId, options);
+        menu.render(document.getElementById('assetManager'));
+    }
+    menu.show();
+    menu.focus();
 };
 
 /*---------------------------------------------------------------------------
@@ -202,8 +222,9 @@ WebGUI.AssetManager.BuildQueryString = function ( state, dt ) {
 WebGUI.AssetManager.formatRevisionDate = function ( elCell, oRecord, oColumn, orderNumber ) {
     var revisionDate    = new Date( oRecord.getData( "revisionDate" ) * 1000 );
     var minutes = revisionDate.getMinutes();
-    if (minutes < 10)
+    if (minutes < 10) {
         minutes = "0" + minutes;
+    }
     elCell.innerHTML    = revisionDate.getFullYear() + '-' + ( revisionDate.getMonth() + 1 )
                         + '-' + revisionDate.getDate() + ' ' + ( revisionDate.getHours() )
                         + ':' + minutes
@@ -285,7 +306,9 @@ WebGUI.AssetManager.initDataTable = function (o) {
                 { key: 'childCount' }
             ],
             metaFields: {
-                totalRecords: "totalAssets" // Access to value in the server response
+                totalRecords  : 'totalAssets',
+                sortColumn    : 'sort',
+                sortDirection : 'dir'
             }
         };
 
@@ -300,15 +323,21 @@ WebGUI.AssetManager.initDataTable = function (o) {
                 initialRequest          : 'recordOffset=0',
                 dynamicData             : true,
                 paginator               : assetPaginator,
-                sortedBy                : WebGUI.AssetManager.DefaultSortedBy,
                 generateRequest         : WebGUI.AssetManager.BuildQueryString
             }
         );
 
     WebGUI.AssetManager.DataTable.handleDataReturnPayload = function(oRequest, oResponse, oPayload) {
-        oPayload.totalRecords = oResponse.meta.totalRecords;
+        var m = oResponse.meta;
+        oPayload.totalRecords = m.totalRecords;
+        this.set('sortedBy', {
+            key: m.sortColumn,
+            dir: m.sortDirection === 'desc' ?
+                YAHOO.widget.DataTable.CLASS_DESC :
+                YAHOO.widget.DataTable.CLASS_ASC
+        });
         return oPayload;
-    }
+    };
 
 };
 

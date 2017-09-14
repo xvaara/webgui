@@ -26,6 +26,8 @@ use Image::Magick;
 use Path::Class::Dir;
 use Storable ();
 use WebGUI::Utility qw(isIn);
+use WebGUI::Event;
+use JSON ();
 
 
 =head1 NAME
@@ -42,6 +44,8 @@ This package provides a mechanism for storing and retrieving files that are not 
  $store = WebGUI::Storage->create($self->session);
  $store = WebGUI::Storage->createTemp($self->session);
  $store = WebGUI::Storage->get($self->session,$id);
+
+ $exists = WebGUI::Storage->storageExists($session, $id);
 
  $filename = $store->addFileFromFilesystem($pathToFile);
  $filename = $store->addFileFromFormPost($formVarName,$attachmentLimit);
@@ -104,6 +108,19 @@ sub _addError {
 	my $errorMessage = shift;
 	push(@{$self->{_errors}},$errorMessage);
 	$self->session->errorHandler->error($errorMessage);
+}
+
+#-------------------------------------------------------------------
+
+=head2 _addFile ( $filename )
+
+Emits the storage::addFile event for this storage/filename.
+
+=cut
+
+sub _addFile {
+    my ($self, $filename) = @_;
+    fire $self->session, 'storage::addFile', $self, $filename;
 }
 
 #-------------------------------------------------------------------
@@ -303,7 +320,10 @@ sub addFileFromFilesystem {
     if (! defined $pathToFile) {
         return undef;
     }
+    ##Handle UTF-8 filenames.
+    $pathToFile = Encode::encode_utf8($pathToFile);
     $pathToFile = Cwd::realpath($pathToFile); # trace any symbolic links
+    $pathToFile = Encode::decode_utf8($pathToFile);
     if (-d $pathToFile) {
         $self->session->log->error($pathToFile." is a directory, not a file.");
         return undef;
@@ -314,10 +334,7 @@ sub addFileFromFilesystem {
         return undef;
     }
     my $filename = (File::Spec->splitpath( $pathToFile ))[2];
-    if (isIn($self->getFileExtension($filename), qw(pl perl sh cgi php asp))) {
-        $filename =~ s/\./\_/g;
-        $filename .= ".txt";
-    }
+    $filename = $self->block_extensions($filename);
     $filename = $self->session->url->makeCompliant($filename);
     my $source;
     my $dest;
@@ -335,6 +352,7 @@ sub addFileFromFilesystem {
     close $dest;
     close $source;
     $self->_cdnAdd;
+    $self->_addFile($filename);
     return $filename;
 }
 
@@ -363,8 +381,15 @@ sub addFileFromFormPost {
     my $session = $self->session;
     return ""
         if ($self->session->http->getStatus eq '413');
-    require Apache2::Request;
-    require Apache2::Upload;
+
+    if ( $self->session->request->isa('WebGUI::Session::Plack') ) {
+        require Plack::Request;
+        require Plack::Request::Upload;
+    }
+    else {
+        require Apache2::Request;
+        require Apache2::Upload;
+    }
     my $filename;
     my $attachmentCount = 1;
     foreach my $upload ($session->request->upload($formVariableName)) {
@@ -374,6 +399,7 @@ sub addFileFromFormPost {
             return $filename;
         }
         my $clientFilename = $upload->filename;
+        $clientFilename = Encode::decode_utf8($clientFilename);
         next
             unless $clientFilename;
         next
@@ -382,16 +408,13 @@ sub addFileFromFormPost {
             if ($upload->size > 1024 * $self->session->setting->get("maxAttachmentSize"));
         $clientFilename =~ s/.*[\/\\]//;
         $clientFilename =~ s/^thumb-//;
-        my $type = $self->getFileExtension($clientFilename);
-        if (isIn($type, qw(pl perl sh cgi php asp html htm))) { # make us safe from malicious uploads
-            $clientFilename =~ s/\./\_/g;
-            $clientFilename .= ".txt";
-        }
+        $clientFilename = $self->block_extensions($clientFilename);
         $filename = $session->url->makeCompliant($clientFilename);
         my $filePath = $self->getPath($filename);
         $attachmentCount++;
         if ($upload->link($filePath)) {
             $self->_changeOwner($filePath);
+            $self->_addFile($filename);
             $self->session->errorHandler->info("Got ".$upload->filename);
         }
         else {
@@ -428,6 +451,7 @@ sub addFileFromHashref {
     Storable::nstore($hashref, $self->getPath($filename))
         or $self->_addError("Couldn't create file ".$self->getPath($filename)." because ".$!);
     $self->_changeOwner($self->getPath($filename));
+    $self->_addFile($filename);
 	$filename  and  $self->_cdnAdd;
 	return $filename;
 }
@@ -451,15 +475,13 @@ The content to write to the file.
 
 sub addFileFromScalar {
 	my ($self, $filename, $content) = @_;
-    if (isIn($self->getFileExtension($filename), qw(pl perl sh cgi php asp html htm))) { # make us safe from malicious uploads
-        $filename =~ s/\./\_/g;
-        $filename .= ".txt";
-    }
+    $filename = $self->block_extensions($filename);
     $filename = $self->session->url->makeCompliant($filename);
 	if (open(my $FILE, ">", $self->getPath($filename))) {
 		print $FILE $content;
 		close($FILE);
         $self->_changeOwner($self->getPath($filename));
+        $self->_addFile($filename);
         $self->_cdnAdd;
 	}
     else {
@@ -496,6 +518,32 @@ sub adjustMaxImageSize {
         return 1;
     }
     return 0;
+}
+
+#-------------------------------------------------------------------
+
+=head2 block_extensions ( $file )
+
+Rename files so they can't be used for malicious purposes.  The list of bad extensions
+includs shell script, perl scripts, php, ASP, perl modules and HTML files.
+
+Any file found with a bad extension will be renamed from file.ext to file_ext.txt
+
+=head3 $file
+
+The file to check for bad extensions.
+
+=cut 
+
+sub block_extensions {
+    my $self = shift;
+    my $file = shift;
+    my $extension = $self->getFileExtension($file);
+    if (isIn($extension, qw(pl perl sh cgi php asp pm html htm))) {
+        $file =~ s/\.$extension/\_$extension/;
+        $file .= ".txt";
+    }
+    return $file;
 }
 
 #-------------------------------------------------------------------
@@ -565,7 +613,12 @@ sub copy {
         else {
             open my $source, '<:raw', $origFile or next FILE;
             open my $dest,   '>:raw', $copyFile or next FILE;
-            File::Copy::copy($source, $dest) or $self->_addError("Couldn't copy file ".$origFile." to ".$copyFile." because ".$!);
+            if (File::Copy::copy($source, $dest)) {
+                $newStorage->_addFile($file);
+            }
+            else {
+                $self->_addError("Couldn't copy file $origFile to $copyFile because $!");
+            }
             close $dest;
             close $source;
         }
@@ -598,6 +651,7 @@ sub copyFile {
     File::Copy::copy( $self->getPath($filename), $self->getPath($newFilename) )
         || croak "Couldn't copy '$filename' to '$newFilename': $!";
     $self->_changeOwner($self->getPath($filename));
+    $self->_addFile($filename);
 
     $self->_cdnAdd;
     return undef;
@@ -1063,7 +1117,7 @@ sub getFiles {
         callback => sub {
             my $obj = shift;
             my $rel = $obj->relative($dir);
-            my $str = $rel->stringify;
+            my $str = Encode::decode_utf8($rel->stringify);
             if (! $showAll ) {
                 return if $str =~ /^thumb-/;
                 return if $str =~ /^\./;
@@ -1244,17 +1298,21 @@ The file to retrieve the thumbnail for.
 =cut
 
 sub getThumbnailUrl {
-	my $self = shift;
-	my $filename = shift;
+    my $self     = shift;
+    my $filename = shift;
 	if (! defined $filename) {
-		$self->session->errorHandler->error("Can't make a thumbnail url without a filename.");
+		$self->session->errorHandler->error("Can't find a thumbnail url without a filename.");
 		return '';
 	}
-    if (! isIn($filename, @{ $self->getFiles() })) {
-        $self->session->errorHandler->error("Can't make a thumbnail for a file named '$filename' that is not in my storage location.");
+    if (! $self->isImage($filename)) {
         return '';
     }
-	return $self->getUrl("thumb-".$filename);
+    my $thumbname = 'thumb-' . $filename;
+    if (! -e $self->getPath($thumbname)) {
+        $self->session->errorHandler->error("Can't find a thumbnail for a file named '$filename' that is not in my storage location.");
+        return '';
+    }
+	return $self->getUrl($thumbname);
 }
 
 #-------------------------------------------------------------------
@@ -1661,28 +1719,58 @@ The groupId that is allowed to edit the files in this storage location.
 =cut
 
 sub setPrivileges {
-	my $self = shift;
-	my $owner = shift;
-	my $viewGroup = shift;
-	my $editGroup = shift;
-
-    my $dirObj = $self->getPathClassDir();
-    return undef if ! defined $dirObj;
-    $dirObj->recurse(
-        callback => sub {
-            my $obj = shift;
-            return unless $obj->is_dir;
-            my $rel = $obj->relative($dirObj);
-
-            if ($owner eq '1' || $viewGroup eq '1' || $viewGroup eq '7' || $editGroup eq '1' || $editGroup eq '7') {
-                $self->deleteFile($rel->file('.wgaccess')->stringify);
+    my $self = shift;
+    my %privs = (
+        users => [],
+        groups => [],
+        assets => [],
+    );
+    if (@_ == 3 && !ref $_[0] && !ref $_[1] && !ref $_[0]) {
+        push @{ $privs{users} }, $_[0];
+        push @{ $privs{groups} }, @_[1,2];
+    }
+    else {
+        for my $object (@_) {
+            if ($object->isa('WebGUI::User')) {
+                push @{ $privs{users} }, $object->getId;
             }
-            else {
-                $self->addFileFromScalar($rel->file('.wgaccess')->stringify,$owner."\n".$viewGroup."\n".$editGroup);
+            elsif ($object->isa('WebGUI::Group')) {
+                push @{ $privs{groups} }, $object->getId;
+            }
+            elsif ($object->isa('WebGUI::Asset')) {
+                push @{ $privs{assets} }, $object->getId;
             }
         }
-    );
+    }
 
+    return $self->writeAccess( %privs );
+}
+
+
+#-------------------------------------------------------------------
+
+=head2 storageExists ( $session, $storageId )
+
+Class method to determine if a storage location exists.  This can't be done
+with C<get> since it will create it if it doesn't exist.  Returns true if the
+storage directory exists.
+
+=head3 $session
+
+A session object, used to find the uploadsPath location
+
+=head3 $storageId
+
+A WebGUI::Storage GUID.
+
+=cut
+
+sub storageExists {
+    my ($class, $session, $storageId) = @_;
+    my $hexId = $session->id->toHex($storageId);
+    my @parts = ($hexId =~ m/^((.{2})(.{2}).+)/)[1,2,0];
+    my $dir = Path::Class::Dir->new($session->config->get('uploadsPath'), @parts);
+    return (-e $dir->stringify && -d _ ? 1 : 0);
 }
 
 
@@ -1757,6 +1845,19 @@ sub tar {
     return $temp;
 }
 
+#----------------------------------------------------------------------------
+
+=head2 trash ( )
+
+Set this storage location as trashed
+
+=cut
+
+sub trash {
+    my ( $self ) = @_;
+    return $self->writeAccess( state => "trash" );
+}
+
 #-------------------------------------------------------------------
 
 =head2 untar ( filename [, storage ] )
@@ -1791,6 +1892,13 @@ sub untar {
     }, ".");
     $self->_changeOwner(@files);
 
+    ##Prevent dangerous files from being added to the storage location via untar
+    FILE: foreach my $file (@files) {
+        my $blockname = $temp->block_extensions($file);
+        next FILE if $blockname eq $file;
+        $temp->renameFile($file, $blockname);
+    }
+
     chdir $originalDir;
     return $temp;
 }
@@ -1807,6 +1915,65 @@ the uploads path.
 sub getDirectoryId {
     my $self = shift;
     return $self->{_pathParts}[2];
+}
+
+#----------------------------------------------------------------------------
+
+=head2 writeAccess( pairs )
+
+Write the given pairs to the wgaccess files in this storage location.
+
+If the storage location should be public, will remove all wgaccess files.
+
+Possible keys:
+
+ users      - an arrayref of userIds to allow access to
+ groups     - an arrayref of groupIds to allow access to
+ assets     - an arrayref of assetIds to validate permissions against
+ state      - a string describing a special state.
+                valid values: "trash" - storage location is trashed
+
+
+=cut
+
+sub writeAccess {
+    my ( $self, %privs ) = @_;
+
+    my $public;
+    if ( $privs{users} ) {
+        for my $user (@{ $privs{users} }) {
+            if ($user eq '1') {
+                $public = 1;
+            }
+        }
+    }
+    if ( $privs{groups} ) {
+        for my $group (@{ $privs{groups} }) {
+            if ($group eq '1' || $group eq '7') {
+                $public = 1;
+            }
+        }
+    }
+    my $accessFile = JSON->new->encode( \%privs );
+
+    my $dirObj = $self->getPathClassDir();
+    return undef if ! defined $dirObj;
+    $dirObj->recurse(
+        callback => sub {
+            my $obj = shift;
+            return unless $obj->is_dir;
+            my $rel = $obj->relative($dirObj);
+
+            if ($public) {
+                $self->deleteFile($rel->file('.wgaccess')->stringify);
+            }
+            else {
+                $self->addFileFromScalar($rel->file('.wgaccess')->stringify, $accessFile);
+            }
+        }
+    );
+
+    return;
 }
 
 1;

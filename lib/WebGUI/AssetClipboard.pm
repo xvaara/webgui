@@ -51,6 +51,59 @@ sub canPaste {
 
 #-------------------------------------------------------------------
 
+=head2 copyInFork ( $process, $args )
+
+WebGUI::Fork method called by www_copy
+
+=cut
+
+sub copyInFork {
+    my ($process, $args) = @_;
+    my $session = $process->session;
+    my $asset = WebGUI::Asset->new($session, $args->{assetId});
+    my @pedigree = ('self');
+    my $childrenOnly = 0;
+    if ($args->{childrenOnly}) {
+        $childrenOnly = 1;
+        push @pedigree, 'children';
+    }
+    else {
+        push @pedigree, 'descendants';
+    }
+    my $ids   = $asset->getLineage(\@pedigree);
+    my $tree  = WebGUI::ProgressTree->new($session, $ids);
+    $process->update(sub { $tree->json });
+    my $patch = Monkey::Patch::patch_class(
+        'WebGUI::Asset', 'duplicate', sub {
+            my $duplicate = shift;
+            my $self      = shift;
+            my $id        = $self->getId;
+            $tree->focus($id);
+            my $asset     = eval { $self->$duplicate(@_) };
+            my $e         = $@;
+            if ($e) {
+                $tree->note($id, $e);
+                $tree->failure($id, 'Died');
+            }
+            else {
+                $tree->success($id);
+            }
+            $process->update(sub { $tree->json });
+            die $e if $e;
+            return $asset;
+        }
+    );
+    my $newAsset = $asset->duplicateBranch($childrenOnly, 'clipboard');
+    $newAsset->update({ title => $newAsset->getTitle . ' (copy)'});
+    if ($args->{commit}) {
+        my $tag = WebGUI::VersionTag->getWorking($session);
+        $tag->requestCommit();
+    }
+}
+
+
+#-------------------------------------------------------------------
+
 =head2 cut ( )
 
 Removes asset from lineage, places it in clipboard state. The "gap" in the lineage is changed in state to clipboard-limbo.
@@ -67,7 +120,15 @@ sub cut {
 	$session->db->write("update asset set state='clipboard', stateChangedBy=?, stateChanged=? where assetId=?", [$session->user->userId, time(), $self->getId]);
 	$session->db->commit;
 	$self->{_properties}{state} = "clipboard";
-    foreach my $asset ($self, @{$self->getLineage(['descendants'], {returnObjects => 1})}) {
+    my $assetIter = $self->getLineageIterator(['descendants']);
+    while ( 1 ) {
+        my $asset;
+        eval { $asset = $assetIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $session->log->error($x->full_message);
+            next;
+        }
+        last unless $asset;
         $asset->purgeCache;
         $asset->updateHistory('cut');
     }
@@ -89,25 +150,44 @@ A hash reference of options that can modify how this method works.
 
 Assets that normally autocommit their workflows (like CS Posts, and Wiki Pages) won't if this is true.
 
+=head4 skipNotification
+
+Disable sending a notification that a new revision was added, for those assets that support it.
+
+=head4 state
+
+A state for the duplicated asset (defaults to 'published')
+
 =cut
 
 sub duplicate {
     my $self        = shift;
     my $options     = shift;
     my $parent      = $self->getParent;
+    ##Remove state and pass all other options along to addChild
+    my $asset_state = delete $options->{state};
     my $newAsset    
-        = $parent->addChild( $self->get, undef, $self->get("revisionDate"), { skipAutoCommitWorkflows => $options->{skipAutoCommitWorkflows} } );
+        = $parent->addChild(
+            $self->get,
+            undef,
+            $self->get("revisionDate"),
+            $options,
+        );
 
-    $self->session->log->error(
-        sprintf "Unable to add child %s (%s) to %s (%s)", $self->getTitle, $self->getId, $parent->getTitle, $parent->getId
-    );
+    if (! $newAsset) {
+        $self->session->log->error(
+            sprintf "Unable to add child %s (%s) to %s (%s)", $self->getTitle, $self->getId, $parent->getTitle, $parent->getId
+        );
+        return undef;
+    }
     # Duplicate metadata fields
     my $sth = $self->session->db->read(
-        "select * from metaData_values where assetId = ?", 
-        [$self->getId]
+        "select * from metaData_values where assetId = ? and revisionDate = ?",
+        [$self->getId, $self->get('revisionDate')]
     );
     while (my $h = $sth->hashRef) {
-        $self->session->db->write("insert into metaData_values (fieldId, assetId, value) values (?, ?, ?)", [$h->{fieldId}, $newAsset->getId, $h->{value}]);
+        $self->session->db->write("insert into metaData_values (fieldId,
+            assetId, revisionDate, value) values (?, ?, ?, ?)", [$h->{fieldId}, $newAsset->getId, $newAsset->get('revisionDate'), $h->{value}]);
     }
 
     # Duplicate keywords
@@ -120,6 +200,10 @@ sub duplicate {
         asset       => $newAsset,
         keywords    => $keywords,
     } );
+
+    if ($asset_state) {
+        $newAsset->setState($asset_state);
+    }
 
     return $newAsset;
 }
@@ -170,6 +254,7 @@ sub getAssetsInClipboard {
        {
            statesToInclude => ["clipboard"],
            returnObjects   => 1,
+           statusToInclude => [qw/approved pending archived/],
            whereClause     => $limit,
        }
     );
@@ -201,21 +286,31 @@ sub paste {
     return 0 unless ($pastedAsset->canPaste());  ##Allow pasted assets to have a say about pasting.
 
     # Don't allow a shortcut to create an endless loop
-	return 0 if ($pastedAsset->get("className") eq "WebGUI::Asset::Shortcut" && $pastedAsset->get("shortcutToAssetId") eq $self->getId);
+    ##Do not paste a shortcut immediately below the original asset
+    return 0 if $pastedAsset->isa('WebGUI::Asset::Shortcut') && $pastedAsset->get("shortcutToAssetId") eq $self->getId;
     my $i18n=WebGUI::International->new($session, 'Asset');
     $outputSub->(sprintf $i18n->get('pasting %s'), $pastedAsset->getTitle) if defined $outputSub;
 	if ($self->getId eq $pastedAsset->get("parentId") || $pastedAsset->setParent($self)) {
-		$pastedAsset->publish(['clipboard','clipboard-limbo']); # Paste only clipboard items
-		$pastedAsset->updateHistory("pasted to parent ".$self->getId);
-        
         # Update lineage in search index.
-        my $updateAssets = $pastedAsset->getLineage(['self', 'descendants'], {returnObjects => 1});
+        my $assetIter = $pastedAsset->getLineageIterator(
+            ['self', 'descendants'], {
+                statesToInclude => ['clipboard','clipboard-limbo']
+            }
+        );
+        while ( 1 ) {
+            my $asset;
+            eval { $asset = $assetIter->() };
+            if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+                $session->log->error($x->full_message);
+                next;
+            }
+            last unless $asset;
  
-        foreach (@{$updateAssets}) {
             $outputSub->(sprintf $i18n->get('indexing %s'), $pastedAsset->getTitle) if defined $outputSub;
-            $_->indexContent();
+            $asset->setState('published');
+            $asset->indexContent();
         }
-
+		$pastedAsset->updateHistory("pasted to parent ".$self->getId);
 		return 1;
 	}
         
@@ -224,38 +319,110 @@ sub paste {
 
 #-------------------------------------------------------------------
 
+=head2 pasteInFork ( )
+
+WebGUI::Fork method called by www_pasteList
+
+=cut
+
+sub pasteInFork {
+    my ( $process, $args ) = @_;
+    my $session = $process->session;
+    my $self    = WebGUI::Asset->new( $session, $args->{assetId} );
+    $session->asset( $self );
+    my @roots   = grep { $_ && $_->canEdit }
+        map { WebGUI::Asset->newPending( $session, $_ ) } @{ $args->{list} };
+
+    my @ids = map {
+        my $list
+            = $_->getLineage( [ 'self', 'descendants' ], { statesToInclude => [ 'clipboard', 'clipboard-limbo' ] } );
+        @$list;
+    } @roots;
+
+    my $tree = WebGUI::ProgressTree->new( $session, \@ids );
+    $process->update(sub { $tree->json });
+    my $patch = Monkey::Patch::patch_class(
+        'WebGUI::Asset',
+        'indexContent',
+        sub {
+            my $indexContent = shift;
+            my $self         = shift;
+            my $id           = $self->getId;
+            $tree->focus($id);
+            my $ret = eval { $self->$indexContent(@_) };
+            my $e = $@;
+            if ($e) {
+                $tree->note( $id, $e );
+                $tree->failure( $id, 'Died' );
+            }
+            else {
+                $tree->success($id);
+            }
+            $process->update( sub { $tree->json } );
+            die $e if $e;
+            return $ret;
+        }
+    );
+    $self->paste( $_->getId ) for @roots;
+} ## end sub pasteInFork
+
+
+#-------------------------------------------------------------------
+
 =head2 www_copy ( )
 
-Duplicates self, cuts duplicate, returns self->getContainer->www_view if canEdit. Otherwise returns an AdminConsole rendered as insufficient privilege.
+Duplicates self, cuts duplicate, returns self->getContainer->www_view if
+canEdit. Otherwise returns an AdminConsole rendered as insufficient privilege.
+If with children/descendants is selected, a progress bar will be rendered.
 
 =cut
 
 sub www_copy {
-    my $self = shift;
-    return $self->session->privilege->insufficient
-        unless $self->canEdit;
+    my $self    = shift;
+    my $session = $self->session;
+    my $http    = $session->http;
+    my $redir   = $self->getParent->getUrl;
+    return $session->privilege->insufficient unless $self->canEdit;
 
+    my $with = $session->form->get('with');
+    my %args;
+    if ($with eq 'children') {
+        $args{childrenOnly} = 1;
+    }
+    elsif ($with ne 'descendants') {
+        my $newAsset = $self->duplicate({
+                skipAutoCommitWorkflows => 1,
+                state                   => 'clipboard'
+            }
+        );
+        $newAsset->update({ title => $newAsset->getTitle . ' (copy)'});
+        my $result = WebGUI::VersionTag->autoCommitWorkingIfEnabled(
+            $session, {
+                allowComments => 1,
+                returnUrl     => $redir,
+            }
+        );
+        $http->setRedirect($redir) unless $result eq 'redirect';
+        return 'redirect';
+    }
 
-    # with: 'children' || 'descendants' || ''
-    my $with = $self->session->form->get('with') || '';
-    my $newAsset;
-    if ($with) {
-        my $childrenOnly = $with eq 'children';
-        $newAsset = $self->duplicateBranch($childrenOnly);
+    my $tag = WebGUI::VersionTag->getWorking($session);
+    if ($tag->canAutoCommit) {
+        $args{commit} = 1;
+        unless ($session->setting->get('skipCommitComments')) {
+            $redir = $tag->autoCommitUrl($redir);
+        }
     }
-    else {
-        $newAsset = $self->duplicate({skipAutoCommitWorkflows => 1});
-    }
-    my $i18n = WebGUI::International->new($self->session, 'Asset');
-    $newAsset->update({ title=>sprintf("%s (%s)",$self->getTitle,$i18n->get('copy'))});
-    $newAsset->cut;
-    if (WebGUI::VersionTag->autoCommitWorkingIfEnabled($self->session, {
-        allowComments   => 1,
-        returnUrl       => $self->getUrl,
-    }) eq 'redirect') {
-        return undef;
-    };
-    return $self->session->asset($self->getContainer)->www_view;
+
+    $args{assetId} = $self->getId;
+    $self->forkWithStatusPage({
+            plugin   => 'ProgressTree',
+            title    => 'Copy Assets',
+            redirect => $redir,
+            method   => 'copyInFork',
+            args     => \%args
+        }
+    );
 }
 
 #-------------------------------------------------------------------
@@ -281,9 +448,8 @@ sub www_copyList {
 	foreach my $assetId ($session->form->param("assetId")) {
 		my $asset = WebGUI::Asset->newByDynamicClass($session,$assetId);
 		if ($asset->canEdit) {
-			my $newAsset = $asset->duplicate({skipAutoCommitWorkflows => 1});
+			my $newAsset = $asset->duplicate({skipAutoCommitWorkflows => 1, state => 'clipboard'});
 			$newAsset->update({ title=>$newAsset->getTitle.' (copy)'});
-			$newAsset->cut;
 		}
 	}
 	if ($self->session->form->process("proceed") ne "") {
@@ -302,8 +468,7 @@ sub www_copyList {
 sub www_createShortcut {
 	my $self    = shift;
     my $session = $self->session;
-    return $session->privilege->insufficient()
-        if !$session->user->isInGroup(12) || !$self->canView;
+    return $session->privilege->insufficient() if ! $self->canEdit;
 	my $isOnDashboard = $self->getParent->isa('WebGUI::Asset::Wobject::Dashboard');
 
 	my $shortcutParent = $isOnDashboard? $self->getParent : WebGUI::Asset->getImportNode($session);
@@ -421,7 +586,7 @@ sub www_duplicateList {
 	foreach my $assetId ($session->form->param("assetId")) {
 		my $asset = WebGUI::Asset->newByDynamicClass($session,$assetId);
 		if ($asset->canEdit) {
-			my $newAsset = $asset->duplicate;
+			my $newAsset = $asset->duplicate({skipAutoCommitWorkflows => 1});
 			$newAsset->update({ title=>$newAsset->getTitle.' (copy)'});
 		}
 	}
@@ -444,7 +609,7 @@ sub www_emptyClipboard {
 	my $self = shift;
 	my $ac = WebGUI::AdminConsole->new($self->session,"clipboard");
 	return $self->session->privilege->insufficient() unless ($self->session->user->isInGroup(4));
-	foreach my $asset (@{$self->getAssetsInClipboard(!($self->session->form->process("systemClipboard") && $self->session->user->isAdmin))}) {
+	foreach my $asset (@{$self->getAssetsInClipboard(!($self->session->form->process("systemClipboard") && $self->session->user->isInGroup($self->session->setting->get('groupIdAdminClipboard'))))}) {
 		$asset->trash;
 	}
 	return $self->www_manageClipboard();
@@ -464,20 +629,29 @@ sub www_manageClipboard {
 	my $ac = WebGUI::AdminConsole->new($self->session,"clipboard");
 	return $self->session->privilege->insufficient() unless ($self->session->user->isInGroup(12));
 	my $i18n = WebGUI::International->new($self->session, "Asset");
-	my ($header,$limit);
-	if ($self->session->form->process("systemClipboard") && $self->session->user->isAdmin) {
-		$header = $i18n->get(966);
-		$ac->addSubmenuItem($self->getUrl('func=manageClipboard'), $i18n->get(949));
-		$ac->addSubmenuItem($self->getUrl('func=emptyClipboard;systemClipboard=1'), $i18n->get(959), 
-			'onclick="return window.confirm(\''.$i18n->get(951,"WebGUI").'\')"',"Asset");
-	} else {
-		$ac->addSubmenuItem($self->getUrl('func=manageClipboard;systemClipboard=1'), $i18n->get(954));
-		$ac->addSubmenuItem($self->getUrl('func=emptyClipboard'), $i18n->get(950),
-			'onclick="return window.confirm(\''.$i18n->get(951,"WebGUI").'\')"',"Asset");
-		$limit = 1;
-	}
-$self->session->style->setLink($self->session->url->extras('assetManager/assetManager.css'), {rel=>"stylesheet",type=>"text/css"});
-        $self->session->style->setScript($self->session->url->extras('assetManager/assetManager.js'), {type=>"text/javascript"});
+
+    my $header;
+    my $limit = 1;
+
+    my $canAdmin = $self->session->user->isInGroup($self->session->setting->get('groupIdAdminClipboard'));
+    if ($self->session->form->process("systemClipboard") && $canAdmin) {
+        $header = $i18n->get(966);
+        $ac->addSubmenuItem($self->getUrl('func=manageClipboard'), $i18n->get(949));
+        $ac->addSubmenuItem($self->getUrl('func=emptyClipboard;systemClipboard=1'), $i18n->get(959), 
+            'onclick="return window.confirm(\''.$i18n->get(951,"WebGUI").'\')"',"Asset");
+        $limit = undef;
+    }
+    elsif ( $canAdmin ) {
+        $ac->addSubmenuItem($self->getUrl('func=manageClipboard;systemClipboard=1'), $i18n->get(954));
+        $ac->addSubmenuItem($self->getUrl('func=emptyClipboard'), $i18n->get(950),
+            'onclick="return window.confirm(\''.$i18n->get(951,"WebGUI").'\')"',"Asset");
+    }
+    else {
+        $ac->addSubmenuItem($self->getUrl('func=emptyClipboard'), $i18n->get(950),
+            'onclick="return window.confirm(\''.$i18n->get(951,"WebGUI").'\')"',"Asset");
+    }
+    $self->session->style->setLink($self->session->url->extras('assetManager/assetManager.css'), {rel=>"stylesheet",type=>"text/css"});
+    $self->session->style->setScript($self->session->url->extras('assetManager/assetManager.js'), {type=>"text/javascript"});
         my $output = "
    <script type=\"text/javascript\">
    //<![CDATA[
@@ -565,26 +739,25 @@ the Asset Manager.
 sub www_pasteList {
     my $self    = shift;
     my $session = $self->session;
-    return $session->privilege->insufficient() unless $self->canEdit && $session->form->validToken;
     my $form    = $session->form;
-    my $pb      = WebGUI::ProgressBar->new($session);
-    ##Need to store the list of assetIds for the status subroutine
-    my @assetIds = $form->param('assetId');
-    ##Need to set the URL that should be displayed when it is done
-    my $i18n     = WebGUI::International->new($session, 'Asset');
-    $pb->start($i18n->get('Paste Assets'), $session->url->extras('adminConsole/assets.gif'));
-    ASSET: foreach my $clipId (@assetIds) {
-        next ASSET unless $clipId;
-        my $pasteAsset = WebGUI::Asset->newPending($session, $clipId);
-        if (! $pasteAsset && $pasteAsset->canEdit) {
-            $pb->update(sprintf $i18n->get('skipping %s'), $pasteAsset->getTitle);
-            next ASSET;
-        }
-        $self->paste($clipId, sub {$pb->update(@_);});
-    }
-    return $pb->finish( ($form->param('proceed') eq 'manageAssets') ? $self->getUrl('op=assetManager') : $self->getUrl );
-}
+    return $session->privilege->insufficient() unless $self->canEdit && $session->form->validToken;
 
+    $self->forkWithStatusPage( {
+            plugin   => 'ProgressTree',
+            title    => 'Paste Assets',
+            redirect => $self->getUrl(
+                $form->get('proceed') eq 'manageAssets'
+                ? 'op=assetManager'
+                : ()
+            ),
+            method => 'pasteInFork',
+            args   => {
+                assetId => $self->getId,
+                list    => [ $form->get('assetId') ],
+            }
+        }
+    );
+} ## end sub www_pasteList
 
 1;
 

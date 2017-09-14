@@ -20,13 +20,16 @@ use WebGUI::Inbox;
 
 use Data::Dumper;
 use Test::More;
+use Test::Exception;
 use URI;
 
-plan tests => 15; # increment this value for each test you create
+plan tests => 19; # increment this value for each test you create
 
 my $session = WebGUI::Test->session;
 $session->user({userId => 3});
 my $admin = $session->user;
+WebGUI::Test->addToCleanup(sub { WebGUI::Test->cleanupAdminInbox; });
+WebGUI::Test->addToCleanup(SQL =>  "delete from mailQueue  where message like '%Threshold=15%'");
 my $inbox = WebGUI::Inbox->new($session);
 
 my $import = WebGUI::Asset->getImportNode($session);
@@ -35,7 +38,11 @@ my $posters = $import->addChild({
     className => 'WebGUI::Asset::Sku::Product',
     url       => 'cell_posters',
     title     => "Red's Posters",
-});
+}, undef, time()-15, { skipAutoCommitWorkflows => 1, });
+
+my $versionTag = WebGUI::VersionTag->getWorking($session);
+$versionTag->commit();
+addToCleanup($versionTag);
 
 my $ritaVarId = $posters->setCollateral('variantsJSON', 'variantId', 'new',
     {
@@ -63,7 +70,7 @@ my $marilynVarId = $posters->setCollateral('variantsJSON', 'variantId', 'new',
         varSku    => 'subway-skirt',
         price     => 50,
         weight    => 1,
-        quantity  => 5,
+        quantity  => 10,
     },
 );
 
@@ -74,12 +81,13 @@ my $workflow  = WebGUI::Workflow->create($session,
         mode       => 'realtime',
     },
 );
+addToCleanup($workflow);
 
 my $threshold = $workflow->addActivity('WebGUI::Workflow::Activity::NotifyAboutLowStock');
 $threshold->set('className'    , 'WebGUI::Activity::NotifyAboutLowStock');
 $threshold->set('toGroup'      , 3);
-$threshold->set('subject'      , 'Threshold=10');
-$threshold->set('warningLimit' , 10);
+$threshold->set('subject'      , 'Threshold=15');
+$threshold->set('warningLimit' , 15);
 
 my $instance1 = WebGUI::Workflow::Instance->create($session,
     {
@@ -104,15 +112,18 @@ is(scalar @{$messages}, 1, 'Received one message');
 my $message = $messages->[0];
 
 my $body = $message->get('message');
-is($message->get('subject'), 'Threshold=10', 'Message has the right subject');
-my @urls = split /\n/, $body;
+is($message->get('subject'), 'Threshold=15', 'Message has the right subject');
+my @table = split /\n/, $body;
+my @urls = @table[2..$#table];
+pop @urls;
 is (scalar @urls, 1, 'Only one variant is below the threshold');
 my $url = pop @urls;
+$url =~ s/^.+?href="([^"]+)".+$/$1/;
 my $uri = URI->new($url);
 is($uri->path,  $posters->getUrl, 'Link in message has correct URL path');
 is($uri->query, 'func=editVariant;vid='.$marilynVarId, 'Link in message has function and variant id');
 
-wipeMessages($inbox, $admin);
+WebGUI::Test->cleanupAdminInbox;
 is(scalar @{$inbox->getMessagesForUser($admin)}, 0, 'All messages deleted');
 $instance1->delete;
 
@@ -135,20 +146,66 @@ is(scalar @{$inbox->getMessagesForUser($admin)}, 0, 'No messages sent since thre
 
 $message = $inbox->getMessagesForUser($admin)->[0];
 
-END {
-    $workflow->delete;
-    $posters->purge;
-    my $i = 0;
-    wipeMessages($inbox, $admin);
-    $messages = $inbox->getMessagesForUser($admin);
-    is(scalar @{$messages}, 0, 'Inbox cleaned up');
-    $session->db->write("delete from mailQueue where message like '%Threshold=10%'");
-}
+note "Test that the workflow does not die when encountering bad assets";
 
-sub wipeMessages {
-    my ($inbox, $user) = @_;
-    foreach my $message (@{ $inbox->getMessagesForUser($user) }) {
-        $message->delete;
+my $otherPosters = $posters->duplicate;
+WebGUI::Test->addToCleanup(sub {
+    $session->db->write("delete from asset      where assetId=?",[$otherPosters->getId]);
+    $session->db->write("delete from assetData  where assetId=?",[$otherPosters->getId]);
+    $session->db->write("delete from sku        where assetId=?",[$otherPosters->getId]);
+    $session->db->write("delete from Product    where assetId=?",[$otherPosters->getId]);
+    $session->db->write("delete from assetIndex where assetId=?",[$otherPosters->getId]);
+});
+my $movie_posters = $import->addChild({
+    className => 'WebGUI::Asset::Sku::Product',
+    url       => 'movie_posters',
+    title     => "Movie Posters",
+}, undef, undef, { skipAutoCommitWorkflows => 1, });
+
+my $movieVarId = $movie_posters->setCollateral('variantsJSON', 'variantId', 'new',
+    {
+        shortdesc => 'Shawshank Redemption',
+        varSku    => 'shawshank-1',
+        price     => 10,
+        weight    => 1,
+        quantity  => 5,
+    },
+);
+my $otherTag     = WebGUI::VersionTag->getWorking($session);
+addToCleanup($otherTag);
+$otherTag->commit;
+
+$threshold->set('warningLimit' , 10);
+my $instance3 = WebGUI::Workflow::Instance->create($session,
+    {
+        workflowId              => $workflow->getId,
+        skipSpectreNotification => 1,
     }
+);
 
-}
+$retVal = $instance3->run();
+$retVal = $instance3->run();
+is($retVal, 'done', 'Workflow is done');
+
+$messages = $inbox->getMessagesForUser($admin);
+is(scalar @{$messages}, 1, 'Received one message');
+WebGUI::Test->cleanupAdminInbox;
+
+my $instance4 = WebGUI::Workflow::Instance->create($session,
+    {
+        workflowId              => $workflow->getId,
+        skipSpectreNotification => 1,
+    }
+);
+#break the asset
+$session->db->write('delete from asset where assetId=?', [$otherPosters->getId]);
+is(WebGUI::Asset->new($session, $otherPosters->getId), undef, 'middle asset broken');
+
+$retVal = $instance4->run();
+$retVal = $instance4->run();
+is($retVal, 'done', 'Workflow is done');
+
+$messages = $inbox->getMessagesForUser($admin);
+is(scalar @{$messages}, 1, 'Still received one message');
+
+#vim:ft=perl

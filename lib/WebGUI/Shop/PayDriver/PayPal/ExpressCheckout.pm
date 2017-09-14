@@ -106,6 +106,14 @@ sub definition {
     $fields{paypal}{defaultValue} = 'https://www.paypal.com/webscr';
     $fields{api}{defaultValue}    = 'https://api-3t.payPal.com/nvp';
 
+    $fields{summaryTemplateId}  = {
+        fieldType    => 'template',
+        label        => $i18n->get('summary template'),
+        hoverHelp    => $i18n->get('summary template help'),
+        namespace    => 'Shop/Credentials',
+        defaultValue => 'GqnZPB0gLoZmqQzYFaq7bg',
+    },
+
     push @{$definition}, {
         name       => $i18n->get('name'),
         properties => \%fields,
@@ -148,7 +156,7 @@ is a hashref, it will be modified in place.
 sub payPalForm {
     my $self = shift;
     my $args = ref $_[0] eq 'HASH' ? shift : {@_};
-    $args->{VERSION}   = '58.0';
+    $args->{VERSION}   = '2.3';
     $args->{USER}      = $self->get('user');
     $args->{PWD}       = $self->get('password');
     $args->{SIGNATURE} = $self->get('signature');
@@ -182,7 +190,6 @@ PayPal API spit back.
 
 sub processPayment {
     my ( $self, $transaction ) = @_;
-    my ( $isSuccess, $gatewayCode, $status, $message );
 
     my $form = $self->payPalForm(
         METHOD        => 'DoExpressCheckoutPayment',
@@ -263,12 +270,14 @@ sub www_sendToPayPal {
     my $url     = $session->url;
     my $base    = $url->getSiteURL . $url->page;
 
+    my $i18n    = WebGUI::International->new( $self->session, $I18N );
     my $returnUrl = URI->new($base);
     $returnUrl->query_form( {
             shop             => 'pay',
             method           => 'do',
             do               => 'payPalCallback',
             paymentGatewayId => $self->getId,
+            LOCALECODE       => $i18n->getLanguage->{locale},
         }
     );
 
@@ -287,12 +296,12 @@ sub www_sendToPayPal {
     my $testMode = $self->get('testMode');
     my $response = LWP::UserAgent->new->post( $self->apiUrl, $form );
     my $params   = $self->responseHash($response);
-    my $i18n     = WebGUI::International->new( $self->session, $I18N );
     my $error;
 
     if ($params) {
         unless ( $params->{ACK} =~ /^Success/ ) {
             my $log = sprintf "Paypal error: Request/response below: %s\n%s\n", Dumper($form), Dumper($params);
+            $log .= $response->request->as_string;
             $session->log->error($log);
             $error = $i18n->get('internal paypal error');
         }

@@ -35,7 +35,7 @@ my $session         = WebGUI::Test->session;
 #----------------------------------------------------------------------------
 # Tests
 
-my $tests = 61;
+my $tests = 65;
 plan tests => 1 + $tests;
 
 #----------------------------------------------------------------------------
@@ -447,7 +447,53 @@ SKIP: {
     ##Clear out this tag so we can do downstream work.
     my $tag = WebGUI::VersionTag->getWorking($session);
     $tag->commit;
-    WebGUI::Test->tagsToRollback($tag);
+    WebGUI::Test->addToCleanup($tag);
+
+    #######################################################################
+    #
+    # import, funky data in the price column
+    #
+    #######################################################################
+
+    my $shelf3 = WebGUI::Asset->getRoot($session)->addChild({className => $class});
+
+    $pass = 0;
+    eval {
+        $pass = $shelf3->importProducts(
+            WebGUI::Test->getTestCollateralPath('productTables/dollarsigns.csv'),
+        );
+    };
+    ok($pass, 'Able to load a table with odd characters in the price column');
+    $e = Exception::Class->caught();
+    is($e, '', '... no exception thrown');
+    is($shelf3->getChildCount, 1, '...imported 1 child sku for shelf3 with old headers');
+
+    my $sign = $shelf3->getFirstChild();
+    my $signCollateral = $sign->getAllCollateral('variantsJSON');
+    cmp_deeply(
+        $signCollateral,
+        [
+            {
+                varSku    => 'dollar signs',
+                shortdesc => 'Silver Dollar Signs',
+                price     => '5.00',
+                weight    => '0.33',
+                quantity  => '1000',
+                variantId => ignore(),
+            },
+        ],
+        'collateral set correctly for sign'
+    );
+
+
+    $shelf3->purge;
+    undef $shelf3;
+
+    ##Clear out this tag so we can do downstream work.
+    my $tag = WebGUI::VersionTag->getWorking($session);
+    $tag->commit;
+    WebGUI::Test->addToCleanup($tag);
+
 
     #######################################################################
     #
@@ -457,13 +503,14 @@ SKIP: {
 
     my $tommy  = WebGUI::User->create($session);
     my $warden = WebGUI::User->create($session);
-    WebGUI::Test->usersToDelete($tommy, $warden);
+    WebGUI::Test->addToCleanup($tommy, $warden);
     my $inGroup = WebGUI::Group->new($session, 'new');
-    WebGUI::Test->groupsToDelete($inGroup);
+    WebGUI::Test->addToCleanup($inGroup);
     $inGroup->addUsers([$tommy->getId]);
 
     my $testTemplate = $root->addChild({
         className => 'WebGUI::Asset::Template',
+        parser    => 'WebGUI::Asset::Template::HTMLTemplate',
         template  => q|{ "noViewableSkus":"<tmpl_var noViewableSkus>","emptyShelf":"<tmpl_var emptyShelf>"}|,
     });
     my $testShelf = $root->addChild({
@@ -471,7 +518,7 @@ SKIP: {
         templateId => $testTemplate->getId,
     });
     my $tag2 = WebGUI::VersionTag->getWorking($session);
-    WebGUI::Test->tagsToRollback($tag2);
+    WebGUI::Test->addToCleanup($tag2);
     $tag2->commit;
     $session->user({userId => 1});
     $testShelf->prepareView;
@@ -486,7 +533,7 @@ SKIP: {
         title       => 'Private Product',
     });
     my $tag3 = WebGUI::VersionTag->getWorking($session);
-    WebGUI::Test->tagsToRollback($tag3);
+    WebGUI::Test->addToCleanup($tag3);
     $tag3->commit;
 
     $session->user({user => $tommy});

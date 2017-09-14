@@ -53,6 +53,7 @@ skip "Unable to load module $class", $tests unless $loaded;
 my $defaultNode = WebGUI::Asset->getDefault($session);
 my $template = $defaultNode->addChild({
     className => 'WebGUI::Asset::Template',
+    parser    => 'WebGUI::Asset::Template::HTMLTemplate',
     title     => 'test poll template',
     template  => q|
 {
@@ -77,7 +78,7 @@ my $poll = $defaultNode->addChild({
 });
 
 my $versionTag = WebGUI::VersionTag->getWorking($session);
-WebGUI::Test->tagsToRollback($versionTag);
+WebGUI::Test->addToCleanup($versionTag);
 $versionTag->commit;
 
 isa_ok($poll, 'WebGUI::Asset::Wobject::Poll');
@@ -106,7 +107,6 @@ my $uploadsPath = Path::Class::Dir->new($session->config->get('uploadsPath'));
 my $uploadsUrl  = Path::Class::Dir->new($session->config->get('uploadsURL'));
 my $graphRelative = $graphUrl->relative($uploadsUrl);
 my $graphFile     = $uploadsPath->file($graphRelative);
-note $graphFile->stringify;
 
 ok(-e $graphFile->stringify, 'graph exists');
 

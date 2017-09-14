@@ -52,7 +52,7 @@ sub alignmentSeparator {
 		return "<br />\n";
 	}
 	else {
-		return " &nbsp; &nbsp;\n";
+		return "&nbsp;&nbsp;";
 	}
 }
 
@@ -230,7 +230,7 @@ sub getValue {
 
 =head2 getDefaultValue ( )
 
-Returns the either the "value" ore "defaultValue" passed in to the object in that order, and doesn't take into account form processing.
+Returns the either the "value" or "defaultValue" passed in to the object in that order, and doesn't take into account form processing.
 
 =cut
 
@@ -255,7 +255,7 @@ sub getDefaultValue {
 
 =head2 getOriginalValue ( )
 
-Returns the either the "value" ore "defaultValue" passed in to the object in that order, and doesn't take into account form processing.
+Returns the either the "value" or "defaultValue" passed in to the object in that order, and doesn't take into account form processing.
 
 =cut
 

@@ -165,18 +165,6 @@ our $I18N = {
 		context		=> q|a help description|,
 	},
 
-	'removeButton help' => {
-		message 	=> q|Clicking this button will remove the item from the cart.|,
-		lastUpdated	=> 0,
-		context		=> q|a help description|,
-	},
-
-	'item shipToButton help' => {
-		message 	=> q|Clicking this button will set an alternate address as the destination of this item.|,
-		lastUpdated	=> 0,
-		context		=> q|a help description|,
-	},
-
 	'shippingAddress help' => {
 		message 	=> q|The HTML formatted address to ship to.|,
 		lastUpdated	=> 0,
@@ -185,6 +173,12 @@ our $I18N = {
 
 	'error help' => {
 		message 	=> q|If there are any problems the error message will be displayed here.|,
+		lastUpdated	=> 0,
+		context		=> q|a help description|,
+	},
+
+	'message help' => {
+		message 	=> q|If the cart is empty, this internationalized message should be displayed to the user.|,
 		lastUpdated	=> 0,
 		context		=> q|a help description|,
 	},
@@ -201,12 +195,6 @@ our $I18N = {
 		context		=> q|a help description|,
 	},
 
-	'checkoutButton help' => {
-		message 	=> q|The button the user pushes to choose a payment method.|,
-		lastUpdated	=> 0,
-		context		=> q|a help description|,
-	},
-
 	'continueShoppingButton help' => {
 		message 	=> q|Clicking this button will take the user back to the site.|,
 		lastUpdated	=> 0,
@@ -215,18 +203,6 @@ our $I18N = {
 
 	'updateButton help' => {
 		message 	=> q|Clicking this button will apply the changes you made to the cart and recalculate all the prices.|,
-		lastUpdated	=> 0,
-		context		=> q|a help description|,
-	},
-
-	'chooseShippingButton help' => {
-		message 	=> q|Clicking this button will let the user pick a shipping address from the address book.|,
-		lastUpdated	=> 0,
-		context		=> q|a help description|,
-	},
-
-	'shipToButton help' => {
-		message 	=> q|Does the same as the chooseShippingButton.|,
 		lastUpdated	=> 0,
 		context		=> q|a help description|,
 	},
@@ -257,6 +233,12 @@ our $I18N = {
 
 	'shippingOptions help' => {
 		message 	=> q|A select list containing all the configured shipping options for this order.|,
+		lastUpdated	=> 0,
+		context		=> q|a help description|,
+	},
+
+	'paymentOptions help' => {
+		message 	=> q|A select list containing all the configured payment options for this order.|,
 		lastUpdated	=> 0,
 		context		=> q|a help description|,
 	},
@@ -465,6 +447,12 @@ our $I18N = {
 		context		=> q|a help description|,
 	},
 
+	'emailField help' => {
+		message 	=> q|A field to contain the email address for this address.|,
+		lastUpdated	=> 0,
+		context		=> q|a help description|,
+	},
+
 	'phoneNumber help' => {
 		message 	=> q|A phone number for this address.|,
 		lastUpdated	=> 0,
@@ -585,6 +573,12 @@ our $I18N = {
 		context => q|field label|
 	},
 
+	'current credit message' => { 
+		message => q|%s has a total credit of %s.|,
+		lastUpdated => 0,
+		context => q|field label|
+	},
+
 	'amount' => { 
 		message => q|Amount|,
 		lastUpdated => 1213632324,
@@ -619,6 +613,12 @@ our $I18N = {
 		message => q|Status Message|,
 		lastUpdated => 0,
 		context => q|field label|
+	},
+
+	'Status' => { 
+		message => q|Status|,
+		lastUpdated => 0,
+		context => q|Whether a transaction was successful, or not.|
 	},
 
 	'payment method' => { 
@@ -659,6 +659,18 @@ our $I18N = {
 
 	'edit address template help' => { 
 		message => q|This template determines what the address editor will look like.|,
+		lastUpdated => 0,
+		context => q|commerce setting help|
+	},
+
+	'select gateway template' => { 
+		message => q|Select Gateway Template|,
+		lastUpdated => 0,
+		context => q|commerce setting|
+	},
+
+	'select gateway template help' => { 
+		message => q|This template is the template for the Select Payment Gateway step.|,
 		lastUpdated => 0,
 		context => q|commerce setting help|
 	},
@@ -956,6 +968,12 @@ our $I18N = {
 		message => q|Ship To|,
 		lastUpdated => 0,
 		context => q|a button the user clicks on to set shipping information|
+	},
+
+	'Special shipping' => { 
+		message => q|Special shipping|,
+		lastUpdated => 0,
+		context => q|a button the user clicks on to set shipping information on an item|
 	},
 
 	'shipping address' => { 
@@ -1306,6 +1324,12 @@ our $I18N = {
         context => q|Template variable for email receipt template|,
     },
 
+    'hasSku' => {
+        message => q|A boolean which is true if the Asset that this item refers to is still in WebGUI.  If this variable is false, then <b>viewItemUrl</b> should not be used.|,
+        lastUpdated => 1213135218,
+        context => q|Template variable for email receipt template|,
+    },
+
     'price help' => {
         message => q|The price of this item, formatted to two decimal places.|,
         lastUpdated => 1213135218,
@@ -1588,6 +1612,24 @@ our $I18N = {
         context => q|Table heading in the vendor payout manager.|,
     },
 
+    'vp select vendor' => {
+        message => q|Please select a vendor from the list above to manage individual payouts.|,
+        lastUpdated => 0,
+        context => q|Message in the vendor payouts manager when no vendor has been selected.|,
+    },
+
+    'vp vendors' => {
+        message => q|Vendors|,
+        lastUpdated => 0,
+        context => q|Label for the vendors section of the vendor payouts manager|,
+    },
+
+    'vp payouts' => {
+        message => q|Payouts|,
+        lastUpdated => 0,
+        context => q|Label for the vendors section of the vendor payouts manager|,
+    },
+   
     'vp item id'  => {
         message => q|Item ID|,
         lastUpdated => 0,
@@ -1669,6 +1711,318 @@ our $I18N = {
         message => q|Choose a shipping method and update the cart to checkout|,
         lastUpdated => 0,
         context => q|Label to make the user choose a shipping method|,
+    },
+
+    'Choose a payment gateway and update the cart to checkout' => {
+        message => q|Choose a payment gateway and update the cart to checkout|,
+        lastUpdated => 0,
+        context => q|Label to make the user choose a payment gateway|,
+    },
+
+	'receipt email template' => { 
+		message => q|Receipt Email Template|,
+		lastUpdated => 0,
+		context => q|commerce setting|
+	},
+
+	'receipt email template help' => { 
+		message => q|Which template should be used to generate an email that will be sent to the user to acknowledge their purchase?|,
+		lastUpdated => 0,
+		context => q|commerce setting help|
+	},
+
+	'sale notification group' => { 
+		message => q|Sale Notification Group|,
+		lastUpdated => 0,
+		context => q|commerce setting|
+	},
+
+	'sale notification group help' => { 
+		message => q|Who should be notified of new transactions?|,
+		lastUpdated => 0,
+		context => q|commerce setting help|
+	},
+
+	'Success' => { 
+		message => q|Success|,
+		lastUpdated => 0,
+		context => q|commerce setting help|
+	},
+
+	'Failed' => { 
+		message => q|Failure|,
+		lastUpdated => 0,
+		context => q|commerce setting help|
+	},
+
+	'Billing Address' => { 
+		message => q|Billing Address|,
+		lastUpdated => 0,
+		context => q|template label for the cart|
+	},
+
+	'Shipping Address' => { 
+		message => q|Shipping Address|,
+		lastUpdated => 0,
+		context => q|template label for the cart|
+	},
+
+	'use same shipping as billing' => { 
+		message => q|Use the same shipping address as billing address.|,
+		lastUpdated => 0,
+		context => q|template label for the cart|
+	},
+
+	'Add new address' => { 
+		message => q|Add new address|,
+		lastUpdated => 0,
+		context => q|form label for the cart.  Allows user to build a new address.|
+	},
+
+	'Update %s' => { 
+		message => q|Update address: %s|,
+		lastUpdated => 0,
+		context => q|form label for the cart.  Allows user to edit an existing address. %s will be replaced by the label for the currently selected address, if there is one.|
+	},
+
+	'Choose a payment method' => { 
+		message => q|Choose a payment method|,
+		lastUpdated => 0,
+		context => q|form label for the cart.  Allows user to choose a payment method.  Bart Jol for Minister in 2012!|
+	},
+
+	'shippableItemsInCart' => { 
+		message => q|A boolean which will be true if any item in the cart requires shipping.|,
+		lastUpdated => 0,
+		context => q|Template variable help.|
+	},
+
+    'no billing address' => { 
+        message => q|Please enter a billing address, or select an existing one.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'no shipping address' => { 
+        message => q|Please enter a shipping address, or select an existing one.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'billing label' => { 
+        message => q|Please enter a label for the billing address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'billing firstName' => { 
+        message => q|Please enter a first name for the billing address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'billing lastName' => { 
+        message => q|Please enter a last name for the billing address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'billing address1' => { 
+        message => q|Please enter a street address for the billing address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'billing city' => { 
+        message => q|Please enter a city for the billing address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'billing code' => { 
+        message => q|Please enter a postal code for the billing address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'billing state' => { 
+        message => q|Please enter a state or province for the billing address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'billing country' => { 
+        message => q|Please enter a country for the billing address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'billing phoneNumber' => { 
+        message => q|Please enter a phone number for the billing address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'shipping label' => { 
+        message => q|Please enter a label for the shipping address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'shipping firstName' => { 
+        message => q|Please enter a first name for the shipping address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'shipping lastName' => { 
+        message => q|Please enter a last name for the shipping address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'shipping address1' => { 
+        message => q|Please enter a street address for the shipping address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'shipping city' => { 
+        message => q|Please enter a city for the shipping address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'shipping code' => { 
+        message => q|Please enter a postal code for the shipping address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'shipping state' => { 
+        message => q|Please enter a state or province for the shipping address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'shipping country' => { 
+        message => q|Please enter a country for the shipping address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'shipping phoneNumber' => { 
+        message => q|Please enter a phone number for the shipping address.|,
+        lastUpdated => 0,
+        context => q|Cart error message|
+    },
+
+    'minimumCartAmount help' => { 
+        message => q|The minimum cart amount, from the settings, formatted to two decimal places.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'userIsVisitor help' => { 
+        message => q|A boolean which will be true if the currrent user is Visitor|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'removeBox help' => { 
+        message => q|A checkbox that will allow this item to be removed from the cart.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'itemAddressChooser help' => { 
+        message => q|A dropdown for choosing an address to ship an individual item in the cart to, enabling per-item shipping.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'shippingAddressChooser help' => { 
+        message => q|A dropdown for choosing a default shipping address for all items in the cart.  Also contains actions for editing and adding new addresses.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'billingAddressChooser help' => { 
+        message => q|A dropdown for choosing a default billing address.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'sameShippingAsBilling help' => { 
+        message => q|A checkbox to tell the cart that the user wants to use the same shipping address, as their billing address.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'loginFormHeader help' => { 
+        message => q|The start of the form to help a user log in.  This variable will only be populated if the current user is Visitor.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'loginFormFooter help' => { 
+        message => q|The end of the form to help a user log in.  This variable will only be populated if the current user is Visitor.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'loginFormUsername help' => { 
+        message => q|A text box for the user to enter in their name.  This variable will only be populated if the current user is Visitor.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'loginFormPassword help' => { 
+        message => q|A text box for the user to enter in their password, obscured.  This variable will only be populated if the current user is Visitor.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'loginFormButton help' => { 
+        message => q|A button to submit the login form.  This variable will only be populated if the current user is Visitor.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'registerLink help' => { 
+        message => q|A link for a user to register an account on this site, if they do not already have one.  This variable will only be populated if the current user is Visitor.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'item taxRate help' => { 
+        message => q|The tax rate for this item.  This variable will only be populated if the current user is not Visitor.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'item taxAmount help' => { 
+        message => q|The amount of tax for this item.  This variable will only be populated if the current user is not Visitor.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'item pricePlusTax help' => { 
+        message => q|The amount of tax plus the price for this item.  This variable will only be populated if the current user is not Visitor.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'item extendedPricePlusTax help' => { 
+        message => q|The amount of tax plus the price for this item, times the quantity of this item in the cart.  This variable will only be populated if the current user is not Visitor.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
+    },
+
+    'item sku deleted' => { 
+        message => q|The Asset for this item cannot be instanced.|,
+        lastUpdated => 0,
+        context => q|Template variable help|
     },
 
 };

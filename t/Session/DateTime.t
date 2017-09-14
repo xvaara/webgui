@@ -17,9 +17,10 @@ use File::Spec;
 use WebGUI::Test;
 use WebGUI::Session;
 
-use Test::More tests => 90; # increment this value for each test you create
+use Test::More tests => 95; # increment this value for each test you create
 
 installBadLocale();
+WebGUI::Test->addToCleanup(sub { unlink File::Spec->catfile(WebGUI::Test->lib, qw/WebGUI i18n BadLocale.pm/); });
  
 my $session = WebGUI::Test->session;
 
@@ -99,13 +100,13 @@ is ($dt->getTimeZone(), 'America/Chicago', 'getTimeZone: time zones not in the a
 my $dude = WebGUI::User->new($session, "new");
 $dude->profileField('timeZone', 'Australia/Perth');
 $session->user({user => $dude});
-WebGUI::Test->usersToDelete($dude);
+WebGUI::Test->addToCleanup($dude);
 is ($dt->getTimeZone(), 'Australia/Perth', 'getTimeZone: valid time zones are allowed');
 
 my $bud = WebGUI::User->new($session, "new");
 $bud->profileField('timeZone', '');
 $session->user({user => $bud});
-WebGUI::Test->usersToDelete($bud);
+WebGUI::Test->addToCleanup($bud);
 is ($dt->getTimeZone(), 'America/Chicago', q|getTimeZone: if user's time zone doesn't exist, then return America/Chicago|);
 
 $session->user({userId => 1});  ##back to Visitor
@@ -217,16 +218,18 @@ cmp_ok(
 ####################################################
 
 is(join(" ",$dt->secondsToInterval(60*60*24*365*2)),   "2 Year(s)",     "secondsToInterval(), years");
-is(join(" ",$dt->secondsToInterval(60*60*24*180)),     "6 Month(s)",    "secondsToInterval(), months");
-is(join(" ",$dt->secondsToInterval(60*60*24*7*3)),     "3 Week(s)",     "secondsToInterval(), weeks");
-is(join(" ",$dt->secondsToInterval(60*60*24*5)),       "5 Day(s)",      "secondsToInterval(), days");
-is(join(" ",$dt->secondsToInterval(60*60*24*8)),       "1 Week(s)",     "secondsToInterval(), days, longer than a week");
-is(join(" ",$dt->secondsToInterval(60*60*24*363)),     "12 Month(s)",   "secondsToInterval(), days, longer than a month");
-is(join(" ",$dt->secondsToInterval(60*60*24*365*2.4)), "2 Year(s)",     "secondsToInterval(), days, longer than a year");
-is(join(" ",$dt->secondsToInterval(60*60*18)),         "18 Hour(s)",    "secondsToInterval(), hours");
-is(join(" ",$dt->secondsToInterval(60*60*24*365*2.9)), "3 Year(s)",     "secondsToInterval(), hours, longer than a year");
-is(join(" ",$dt->secondsToInterval(60*27)),            "27 Minute(s)",  "secondsToInterval(), minutes");
-is(join(" ",$dt->secondsToInterval(59)),               "59 Second(s)",  "secondsToInterval(), seconds");
+is(join(" ",$dt->secondsToInterval(60*60*24*180)),     "6 Month(s)",    "... months");
+is(join(" ",$dt->secondsToInterval(60*60*24*7*3)),     "3 Week(s)",     "... weeks");
+is(join(" ",$dt->secondsToInterval(60*60*24*5)),       "5 Day(s)",      "... days");
+is(join(" ",$dt->secondsToInterval(60*60*24*8)),       "1 Week(s)",     "... days, longer than a week");
+is(join(" ",$dt->secondsToInterval(60*60*24*363)),     "12 Month(s)",   "... days, longer than a month");
+is(join(" ",$dt->secondsToInterval(60*60*24*365*2.4)), "2 Year(s)",     "... days, longer than a year");
+is(join(" ",$dt->secondsToInterval(60*60*18)),         "18 Hour(s)",    "... hours");
+is(join(" ",$dt->secondsToInterval(60*60*24*365*2.9)), "3 Year(s)",     "... hours, longer than a year");
+is(join(" ",$dt->secondsToInterval(60*27)),            "27 Minute(s)",  "... minutes");
+is(join(" ",$dt->secondsToInterval(59)),               "59 Second(s)",  "... seconds");
+is(join(" ",$dt->secondsToInterval(3600)),             "1 Hour(s)",     "... exactly 1 hour");
+is(join(" ",$dt->secondsToInterval(60)),               "1 Minute(s)",   "... exactly 1 minute");
 
 ####################################################
 #
@@ -295,8 +298,14 @@ cmp_ok(
 
 $dude->profileField('language', 'BadLocale');
 $session->user({user => $dude});
-is($dt->epochToHuman($wgbday), '8/16/2001  9:00 pm', 'epochToHuman: constructs a default locale if the language does not provide one.');
+is($dt->epochToHuman($wgbday), '8/16/2001 9:00 pm', 'epochToHuman: constructs a default locale if the language does not provide one.');
 $session->user({userId => 1});
+
+##Variable digit days, months and hours
+is($dt->epochToHuman($wgbday,'%M'), '8', '... single digit month');
+my $dayEpoch = DateTime->from_epoch(epoch => $wgbday)->subtract(days => 10)->epoch;
+is($dt->epochToHuman($dayEpoch,'%D'), '6', '... single digit day');
+is($dt->epochToHuman($dayEpoch,'%H'), '8', '... single digit hour');
 
 sub installBadLocale {
 	copy(
@@ -305,6 +314,4 @@ sub installBadLocale {
 	);
 }
 
-END {
-	unlink File::Spec->catfile(WebGUI::Test->lib, qw/WebGUI i18n BadLocale.pm/);
-}
+#vim:ft=perl

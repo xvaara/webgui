@@ -31,6 +31,7 @@ use WebGUI::Utility;
 use WebGUI::Group;
 use WebGUI::AssetCollateral::DataForm::Entry;
 use WebGUI::Form::SelectRichEditor;
+use WebGUI::Paginator;
 use JSON ();
 
 our @ISA = qw(WebGUI::Asset::Wobject);
@@ -83,16 +84,56 @@ sub _createForm {
 }
 
 #-------------------------------------------------------------------
+
+=head2 _getFormFields ( )
+
+Return a list of form fields for this DataForm.
+
+=cut
+
+sub _getFormFields {
+    my $self          = shift;
+    my $session       = $self->session;
+    my $entry         = $self->entry;
+    my @orderedFields = map { $self->getFieldConfig($_) } @{ $self->getFieldOrder };
+    my $func       = $session->form->process('func');
+    my $ignoreForm = $func eq 'editSave' || $func eq 'editFieldSave';
+    my @forms      = ();
+    for my $field (@orderedFields) {
+        my $value;
+        if ($entry) {
+            $value = $entry->field( $field->{name} );
+        }
+        elsif (!$ignoreForm && defined (my $formValue = $self->session->form->process($field->{name}))) {
+            $value = $formValue;
+        }
+        my $hidden
+            = ($field->{status} eq 'hidden' && !$session->var->isAdminOn)
+            || ($field->{isMailField} && !$self->get('mailData'));
+	
+        # populate Rich Editor field if the field is an HTMLArea
+        if ($field->{type} eq "HTMLArea") { 
+            $field->{htmlAreaRichEditor} = $self->get("htmlAreaRichEditor") ;
+        }
+        my $form = $self->_createForm($field, $value);
+        $form->headTags();
+        push @forms, [$field, $form];
+    }
+    return @forms;
+}
+
+#-------------------------------------------------------------------
 sub _fieldAdminIcons {
     my $self = shift;
     my $fieldName = shift;
     my $i18n = WebGUI::International->new($self->session,"Asset_DataForm");
+    my $mode = ";mode=" . $self->currentView;
     my $output;
-    $output = $self->session->icon->delete('func=deleteFieldConfirm;fieldName='.$fieldName,$self->get("url"),$i18n->get(19))
+    $output = $self->session->icon->delete('func=deleteFieldConfirm;fieldName='.$fieldName.$mode,$self->get("url"),$i18n->get(19))
         unless $self->getFieldConfig($fieldName)->{isMailField};
-    $output .= $self->session->icon->edit('func=editField;fieldName='.$fieldName,$self->get("url"))
-        . $self->session->icon->moveUp('func=moveFieldUp;fieldName='.$fieldName,$self->get("url"))
-        . $self->session->icon->moveDown('func=moveFieldDown;fieldName='.$fieldName,$self->get("url"));
+    $output .= $self->session->icon->edit('func=editField;fieldName='.$fieldName.$mode,$self->get("url"))
+        . $self->session->icon->moveUp('func=moveFieldUp;fieldName='.$fieldName.$mode,$self->get("url"))
+        . $self->session->icon->moveDown('func=moveFieldDown;fieldName='.$fieldName.$mode,$self->get("url"));
     return $output;
 }
 #-------------------------------------------------------------------
@@ -220,17 +261,54 @@ sub deleteTab {
 =head2 getContentLastModified 
 
 Extends the base method to modify caching.  If the currentView is in list mode, or
-an entry is being viewed, bypass caching altogether.
+an entry is being viewed, or the DataForm has a captcha, bypass caching altogether.
 
 =cut
 
 sub getContentLastModified {
     my $self = shift;
-    my $hasCaptcha = isIn('Captcha', map { $_->{type} } map { $self->getFieldConfig($_) } @{ $self->getFieldOrder });
-    if ($self->currentView eq 'list' || $self->session->form->process('entryId') || $hasCaptcha) {
+    if ($self->currentView eq 'list' || $self->session->form->process('entryId') || $self->hasCaptcha) {
         return time;
     }
     return $self->SUPER::getContentLastModified;
+}
+
+#-------------------------------------------------------------------
+
+=head2 entry ( [ $entry ] )
+
+Returns a DataForm Entry object.  If one is cached in the object, it will return it.
+If the current request object has an entryId, then it will fetch the Entry from the database.
+Otherwise, it will return an empty DataForm Entry object.
+
+=head3 $entry
+
+A DataForm Entry object.  If passed, it will set the cache in this object.  This takes precedence
+over any other option.
+
+=cut
+
+sub entry {
+    my $self = shift;
+    my $entry = shift;
+    $self->{_entry} = $entry if defined $entry;
+    return $self->{_entry} if $self->{_entry};
+    my $entryId = $self->session->form->process("entryId");
+    $self->{_entry} = $self->entryClass->new($self, ($entryId && $self->canEdit) ? $entryId : ());
+    return $self->{_entry};
+}
+
+#-------------------------------------------------------------------
+
+=head2 hasCaptcha
+
+Returns true if the DataForm uses a captcha as one of the fields.
+
+=cut
+
+sub hasCaptcha {
+    my $self = shift;
+    return isIn('Captcha', map { $_->{type} } map { $self->getFieldConfig($_) } @{ $self->getFieldOrder });
 }
 
 #-------------------------------------------------------------------
@@ -697,9 +775,10 @@ A hash reference.  New template variables will be appended to it.
 =cut
 
 sub getListTemplateVars {
-	my $self = shift;
-	my $var = shift;
-	my $i18n = WebGUI::International->new($self->session,"Asset_DataForm");
+	my $self    = shift;
+    my $session = $self->session;
+	my $var     = shift;
+	my $i18n    = WebGUI::International->new($session,"Asset_DataForm");
 	$var->{"back.url"} = $self->getFormUrl;
 	$var->{"back.label"} = $i18n->get('go to form');
     my $fieldConfig = $self->getFieldConfig;
@@ -709,11 +788,14 @@ sub getListTemplateVars {
             'field.label'       => $fieldConfig->{$_}{label},
             'field.isMailField' => $fieldConfig->{$_}{isMailField},
             'field.type'        => $fieldConfig->{$_}{type},
+            "field.controls"          => $self->_fieldAdminIcons($fieldConfig->{$_}{name}),
         }
     } @{ $self->getFieldOrder };
     $var->{field_loop} = \@fieldLoop;
     my @recordLoop;
-    my $entryIter = $self->entryClass->iterateAll($self);
+    my $p = WebGUI::Paginator->new($session,$self->getUrl("mode=list"));
+    $p->setDataByCallback(sub { return $self->entryClass->iterateAll($self, { offset => $_[0], limit => $_[1], }); });
+    my $entryIter = $p->getPageIterator();
     while ( my $entry = $entryIter->() ) {
         my $entryData = $entry->fields;
         my @dataLoop;
@@ -734,9 +816,9 @@ sub getListTemplateVars {
             %dataVars,
             "record.ipAddress"              => $entry->ipAddress,
             "record.edit.url"               => $self->getFormUrl("func=view;entryId=".$entry->getId),
-            "record.edit.icon"              => $self->session->icon->edit("func=view;entryId=".$entry->getId, $self->get('url')),
+            "record.edit.icon"              => $session->icon->edit("func=view;entryId=".$entry->getId, $self->get('url')),
             "record.delete.url"             => $self->getUrl("func=deleteEntry;entryId=".$entry->getId),
-            "record.delete.icon"            => $self->session->icon->delete("func=deleteEntry;entryId=".$entry->getId, $self->get('url'), $i18n->get('Delete entry confirmation')),
+            "record.delete.icon"            => $session->icon->delete("func=deleteEntry;entryId=".$entry->getId, $self->get('url'), $i18n->get('Delete entry confirmation')),
             "record.username"               => $entry->username,
             "record.userId"                 => $entry->userId,
             "record.submissionDate.epoch"   => $entry->submissionDate->epoch,
@@ -746,6 +828,7 @@ sub getListTemplateVars {
         };
     }
     $var->{record_loop} = \@recordLoop;
+    $p->appendTemplateVars($var);
     return $var;
 }
 
@@ -848,8 +931,6 @@ sub getRecordTemplateVars {
         $var->{'delete.label'   } = $i18n->get(90);
         $var->{'entryId'        } = $entryId;
     }
-    my $func = $session->form->process('func');
-    my $ignoreForm = $func eq 'editSave' || $func eq 'editFieldSave';
 
     my %tabById;
     my @tabLoop;
@@ -872,26 +953,21 @@ sub getRecordTemplateVars {
     }
 
     my @fieldLoop;
-    my @fields = map { $self->getFieldConfig($_) } @{ $self->getFieldOrder };
-    for my $field (@fields) {
+    if (!$self->{_cached_forms}) {
+        $self->{_cached_forms} = [ $self->_getFormFields($entry) ];
+    }
+    my @fields = @{ $self->{_cached_forms} };
+    for my $field_form (@fields) {
+        my ($field, $form) = @{ $field_form };
         # need a copy
-        my $value;
-        if ($entry) {
-            $value = $entry->field( $field->{name} );
-        }
-        elsif (!$ignoreForm && defined (my $formValue = $self->session->form->process($field->{name}))) {
-            $value = $formValue;
-        }
-        my $hidden
-            = ($field->{status} eq 'hidden' && !$session->var->isAdminOn)
-            || ($field->{isMailField} && !$self->get('mailData'));
+        my $hidden =  ($field->{status} eq 'hidden' && !$session->var->isAdminOn)
+                   || ($field->{isMailField} && !$self->get('mailData'));
 	
-	# populate Rich Editor field if the field is an HTMLArea
-	if ($field->{type} eq "HTMLArea") { 
-		$field->{htmlAreaRichEditor} = $self->get("htmlAreaRichEditor") ;
-	}
-        my $form = $self->_createForm($field, $value);
-        $value = $form->getValueAsHtml;
+        # populate Rich Editor field if the field is an HTMLArea
+        if ($field->{type} eq "HTMLArea") { 
+            $field->{htmlAreaRichEditor} = $self->get("htmlAreaRichEditor") ;
+        }
+        my $value = $form->getValueAsHtml;
         my %fieldProperties = (
             "form"          => $form->toHtml,
             "name"          => $field->{name},
@@ -1204,6 +1280,8 @@ Renders the list view of the DataForm.
 
 sub viewList {
     my $self    = shift;
+    return $self->session->privilege->insufficient
+        unless $self->session->user->isInGroup($self->get("groupToViewEntries"));
     my $var     = $self->getTemplateVars;
     return $self->processTemplate($self->getListTemplateVars($var), undef, $self->{_viewListTemplate});
 }
@@ -1228,6 +1306,12 @@ sub prepareViewForm {
             templateId => $templateId,
             assetId    => $self->getId,
         );
+    }
+    ##Check to see if this already exists, since in www_process, getRecordTemplateVars is
+    ##called before prepareViewForm.  Normally, however, this prepareViewForm will be called
+    ##first.
+    if (!$self->{_cached_forms}) {
+        $self->{_cached_forms} = [ $self->_getFormFields() ];
     }
     $template->prepare($self->getMetaDataAsTemplateVariables);
     $self->{_viewFormTemplate} = $template;
@@ -1258,10 +1342,12 @@ sub viewForm {
     my $entry       = shift;
     my $var         = $self->getTemplateVars;
     if (!$entry) {
-        my $entryId = $self->session->form->process("entryId");
-        $entry = $self->entryClass->new($self, ($entryId && $self->canEdit) ? $entryId : ());
+        $entry = $self->entry;
     }
     $var = $passedVars || $self->getRecordTemplateVars($var, $entry);
+    if ($self->hasCaptcha) {
+        $self->session->http->setCacheControl('none');
+    }
     return $self->processTemplate($var, undef, $self->{_viewFormTemplate});
 }
 
@@ -2073,8 +2159,7 @@ sub www_process {
         unless $self->canView;
     my $session = $self->session;
     my $i18n    = WebGUI::International->new($session,"Asset_DataForm");
-    my $entryId = $session->form->process('entryId');
-    my $entry   = $self->entryClass->new($self, ( $entryId ? $entryId : () ) );
+    my $entry   = $self->entry;
 
     my $var = $self->getTemplateVars;
 
@@ -2132,7 +2217,7 @@ sub www_process {
     }
 
     # Send email
-    if ($self->get("mailData") && !$entryId) {
+    if ($self->get("mailData") && !$entry->entryId) {
         $self->sendEmail($var, $entry);
     }
 

@@ -44,7 +44,7 @@ my $featuredPage
         content         => 'A how-to book',
     }, undef, undef, { skipAutoCommitWorkflows => 1 } );
 
-WebGUI::Test->tagsToRollback( WebGUI::VersionTag->getWorking( $session ) );
+WebGUI::Test->addToCleanup( WebGUI::VersionTag->getWorking( $session ) );
 
 #----------------------------------------------------------------------------
 # Tests
@@ -69,9 +69,5 @@ cmp_deeply(
     "appendFeaturedPageVars returns correct variables, prefixed with 'featured_'",
 );
 
-#----------------------------------------------------------------------------
-# Cleanup
-END {
 
-}
 #vim:ft=perl

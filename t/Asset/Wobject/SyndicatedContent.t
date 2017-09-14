@@ -20,9 +20,11 @@ use Data::Dumper;
 
 use WebGUI::Test;
 use WebGUI::Session;
-use Test::More tests => 20; # increment this value for each test you create
+use Test::More tests => 30; # increment this value for each test you create
+use Test::Deep;
 use WebGUI::Asset::Wobject::SyndicatedContent;
 use XML::FeedPP;
+use WebGUI::Cache;
 
 my $session = WebGUI::Test->session;
 my %var;
@@ -36,7 +38,7 @@ my $node = WebGUI::Asset->getImportNode($session);
 # Create a version tag to work in
 my $versionTag = WebGUI::VersionTag->getWorking($session);
 $versionTag->set({name=>"SyndicatedContent Test"});
-WebGUI::Test->tagsToRollback($versionTag);
+addToCleanup($versionTag);
 my $syndicated_content = $node->addChild({className=>'WebGUI::Asset::Wobject::SyndicatedContent'});
 
 ##############################
@@ -50,7 +52,7 @@ isa_ok($syndicated_content, 'WebGUI::Asset::Wobject::SyndicatedContent');
 my $newSyndicatedContentSettings = {
 	cacheTimeout => 124,
 	templateId   => "PBtmpl0000000000000065", 
-    rssUrl      => 'http://svn.webgui.org/svnweb/plainblack/rss/WebGUI/',
+    rssUrl      => 'http://github.com/plainblack/webgui/commits/master.atom',
 };
 
 # update the new values for this instance
@@ -112,7 +114,7 @@ ok($processed_template, "A response was received from processTemplate.");
 #
 ####################################################################
 
-##Construct a feed with no description, so the resulting template variables can
+##Construct a feed with no description so the resulting template variables can
 ##be checked for an undef description
 my $feed = XML::FeedPP->new(<<EOFEED);
 <?xml version="1.0" encoding="UTF-8" ?>
@@ -138,3 +140,149 @@ EOFEED
 
 my $vars = $syndicated_content->getTemplateVariables($feed);
 ok( defined $vars->{item_loop}->[0]->{description}, 'getTemplateVariables: description is not undefined');
+
+##Construct a feed with a wrapped description, to check for paragraph handling.
+$feed = XML::FeedPP->new(<<EOFEED);
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss">
+<channel>
+<title>The WebGUI buglist</title>
+<link>/tbb</link>
+<copyright /><pubDate>Mon, 12 Oct 2009 11:54:28 -0500</pubDate>
+<description />
+<item>
+<title>Description with wrapped HTML paragraphs</title>
+<link>http://www.webgui.org/use/bugs/tracker/11563</link>
+<author>serif</author>
+<epochDate>1254854387</epochDate>
+<guid isPermaLink="true">http://www.webgui.org/use/bugs/tracker/11563</guid>
+<pubDate>Mon, 14 May 2010 8:12:00 -0500</pubDate>
+<description>
+&lt;p&gt;In the attached feed, there is a hidden return line character from the
+Rich Text editor in the first sentence of the description. When using a Syndicated Content
+for the feed, the variable descriptionFirstParagraph variable cuts off at this return line
+character, creating invalid markup.&lt;/p&gt;
+&lt;p&gt;No more text is shown of the first paragraph beyond the bold characters of the first line.&lt;/p&gt;
+&lt;p&gt;Third paragraph, for completeness.&lt;/p&gt;
+</description>
+<media:content
+    url="http://www.plainblack.com/wg_btn.jpg"
+    filesize="1415"
+    type="image/jpeg"
+    medium="image" />
+</item>
+</channel>
+</rss>
+EOFEED
+
+$vars = $syndicated_content->getTemplateVariables($feed);
+is $vars->{item_loop}->[0]->{descriptionFirstParagraph},
+"<p>In the attached feed, there is a hidden return line character from the Rich Text editor in the first sentence of the description. When using a Syndicated Content for the feed, the variable descriptionFirstParagraph variable cuts off at this return line character, creating invalid markup.</p>",
+'... first paragraph, when HTML is used';
+is $vars->{item_loop}->[0]->{descriptionFirst2paragraphs},
+"<p>In the attached feed, there is a hidden return line character from the Rich Text editor in the first sentence of the description. When using a Syndicated Content for the feed, the variable descriptionFirstParagraph variable cuts off at this return line character, creating invalid markup.</p><p>No more text is shown of the first paragraph beyond the bold characters of the first line.</p>",
+'... first two paragraphs, when HTML is used';
+is $vars->{item_loop}->[0]->{descriptionFirst10words},
+"In the attached feed, there is a hidden return line ",
+'... first 10 words, with HTML stripped';
+is $vars->{item_loop}->[0]->{descriptionFirstSentence},
+"In the attached feed, there is a hidden return line character from the
+Rich Text editor in the first sentence of the description.",
+'... first sentence, with HTML stripped';
+
+is_deeply $vars->{item_loop}->[0]->{media}, [
+    {
+        url      => 'http://www.plainblack.com/wg_btn.jpg',
+        type     => 'image/jpeg',
+        medium   => 'image',
+        filesize => 1415,
+    }
+], 'MediaRSS';
+
+####################################################################
+#
+#  generateFeed, hasTerms
+#
+####################################################################
+
+sub titles_are {
+    my ($expected, $message) = @_;
+    my $feed = $syndicated_content->generateFeed;
+    my @got = map { $_->title } $feed->get_item;
+    cmp_deeply \@got, $expected, $message;
+}
+
+$syndicated_content->update({ hasTerms => 'WebGUI', });
+my $testFeedUrl = 'http://www.example.com/feed.rss';
+$syndicated_content->update({ rssUrl => $testFeedUrl, });
+my $cache = WebGUI::Cache->new($session, $testFeedUrl, 'RSS');
+$cache->set(slurp_rss('tbb.rss'), 60);
+
+my $feed = $syndicated_content->generateFeed;
+
+titles_are(
+    [
+        'Google Picasa Plugin for WebGUI Gallery',
+        'WebGUI Roadmap',
+        'WebGUI 8 Performance',
+    ],
+    'generateFeed: filters items based on the terms being in title, or description'
+);
+
+
+####################################################################
+#
+#  Odd feeds
+#
+####################################################################
+
+##Feed with no links or pubDates.
+$syndicated_content->update({
+    hasTerms     => '',
+    maxHeadlines => 50,
+});
+$cache->set(slurp_rss('duplicate-link.rss'), 60);
+
+my $oddFeed1 = $syndicated_content->generateFeed();
+my @oddItems = $oddFeed1->get_item();
+is (@oddItems, 2, 'feed has items even without pubDates or links');
+
+####################################################################
+#
+#  sorting
+#
+####################################################################
+
+$cache->set(slurp_rss('tbb_odd.rss'), 60);
+my @ascending  = (
+    'I have arrived in Lisboa!',
+    'WebGUI 8 Performance',
+    'WebGUI Roadmap',
+    'Google Picasa Plugin for WebGUI Gallery',
+);
+my @descending = reverse @ascending;
+my @feed       = (
+    'WebGUI Roadmap',
+    'Google Picasa Plugin for WebGUI Gallery',
+    'I have arrived in Lisboa!',
+    'WebGUI 8 Performance',
+);
+
+$syndicated_content->update({ sortItems => 'pubDate_asc' });
+titles_are \@ascending, 'ascending sort';
+
+$syndicated_content->update({ sortItems => 'pubDate_des' });
+titles_are \@descending, 'descending sort';
+
+$syndicated_content->update({ sortItems => 'feed' });
+titles_are \@feed, 'feed order';
+
+sub slurp_rss {
+    my $file = shift;
+    my $filepath = WebGUI::Test->getTestCollateralPath('rss/' . $file);
+    open my $fh, '<', $filepath
+        or die "Unable to get RSS file $file: $!";
+    my $content = do { local $/; <$fh> };
+    close $fh;
+    return $content;
+}

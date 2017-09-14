@@ -15,6 +15,7 @@ package WebGUI::Session;
 =cut
 
 use strict;
+use Scalar::Util qw( weaken );
 use WebGUI::Config;
 use WebGUI::SQL;
 use WebGUI::User;
@@ -77,7 +78,7 @@ B<NOTE:> It is important to distinguish the difference between a WebGUI session 
  $session->url
  $session->user
  $session->var
- 
+
 
 =head1 METHODS
 
@@ -109,6 +110,19 @@ sub asset {
 
 #-------------------------------------------------------------------
 
+=head2 clearAsset ( )
+
+Clears out the session asset.
+
+=cut
+
+sub clearAsset {
+    my $self        = shift;
+    $self->{_asset} = undef;
+}
+
+#-------------------------------------------------------------------
+
 =head2 close
 
 Cleans up a WebGUI session information from memory and disconnects from any resources opened by the session.
@@ -121,14 +135,15 @@ sub close {
 
 	# Kill circular references.  The literal list is so that the order
 	# can be explicitly shuffled as necessary.
-	foreach my $key (qw/_asset _datetime _icon _slave _db _env _form _http _id _output _os _privilege _scratch _setting _stow _style _url _user _var _errorHandler/) {
+        # XXX Is this necessary when we have weakened session refs?
+	foreach my $key (qw/_asset _datetime _icon _slave _db _env _form _http _id _output _os _privilege _scratch _setting _stow _style _url _user _var _errorHandler /) {
 		delete $self->{$key};
 	}
 }
 
 #-------------------------------------------------------------------
 
-=head2 config ( ) 
+=head2 config ( )
 
 Returns a WebGUI::Config object.
 
@@ -158,7 +173,7 @@ sub datetime {
 
 #-------------------------------------------------------------------
 
-=head2 db ( [ skipFatal ] ) 
+=head2 db ( [ skipFatal ] )
 
 Returns a WebGUI::SQL object, which is connected to the WebGUI database.
 
@@ -185,7 +200,7 @@ sub db {
 			if ($skipFatal) {
 				return undef;
 			}
-			else { 	
+			else {
 				$self->errorHandler->fatal("Couldn't connect to WebGUI database, and can't continue without it.");
 			}
 		}
@@ -195,7 +210,7 @@ sub db {
 
 #-------------------------------------------------------------------
 
-=head2 dbSlave ( ) 
+=head2 dbSlave ( )
 
 Returns a random slave database handler, if one is defined, otherwise it returns the main one. Likewise if admin mode is on it returns the main one.
 
@@ -217,12 +232,10 @@ sub dbSlave {
             $self->{_slave} = WebGUI::SQL->connect($self, $slave->{dsn},$slave->{user},$slave->{pass});
         }
 	}
-    if (!exists $self->{_slave}) {
-        return $self->db;
-    }
-    else {
+    if (exists $self->{_slave} && $self->{_slave}) {
         return $self->{_slave};
     }
+    return $self->db;
 }
 
 
@@ -270,7 +283,12 @@ Returns a WebGUI::Session::Env object.
 
 sub env {
 	my $self = shift;
+
 	unless (exists $self->{_env}) {
+        # make sure sure we override %ENV and put Placks env in there.
+        if ( $self->request && $self->request->isa( 'WebGUI::Session::Plack' ) ) {
+            %ENV = %{ $self->request->{ request }->env };
+        }
 		$self->{_env} = WebGUI::Session::Env->new;
 	}
 	return $self->{_env};
@@ -440,7 +458,7 @@ sub open {
 	my $config = WebGUI->config || WebGUI::Config->new($webguiRoot,$configFile);
 	my $self = {_config=>$config, _server=>$server};
 	bless $self , $class;
-    
+
     # $self->{_request} = $request if (defined $request);
     if ($request) {
         if ($request->isa('WebGUI::Session::Plack')) {
@@ -452,7 +470,7 @@ sub open {
             $self->{_request} = WebGUI::Session::Request->new( r => $request, session => $self );
         }
     }
-	
+
 	my $sessionId = shift || $self->http->getCookies->{$config->getCookieName} || $self->id->generate;
 	$sessionId = $self->id->generate unless $self->id->valid($sessionId);
 	my $noFuss = shift;
@@ -480,7 +498,7 @@ sub output {
 
 #-------------------------------------------------------------------
 
-=head2 os ( ) 
+=head2 os ( )
 
 Returns a WebGUI::Session::Os object.
 
@@ -577,7 +595,7 @@ sub server {
 
 #-------------------------------------------------------------------
 
-=head2 setting ( param ) 
+=head2 setting ( param )
 
 Returns the associated WebGUI::Session::Setting object.
 
@@ -617,7 +635,7 @@ Returns a WebGUI::Session::Style object.
 =cut
 
 sub style {
-	my $self = shift;	
+	my $self = shift;
 	unless (exists $self->{_style}) {
 		$self->{_style} = WebGUI::Session::Style->new($self);
 	}
@@ -627,7 +645,7 @@ sub style {
 
 #-------------------------------------------------------------------
 
-=head2 url ( ) 
+=head2 url ( )
 
 Returns a WebGUI::Session::Url object.
 
@@ -665,18 +683,18 @@ sub user {
 	my $self = shift;
 	my $option = shift;
 	if (defined $option) {
-		my $userId = $option->{userId} || $option->{user}->userId; 
+		my $userId = $option->{userId} || $option->{user}->userId;
    		$self->var->start($userId,$self->getId);
 		if ($self->setting->get("passiveProfilingEnabled")) {
 			$self->db->write("update passiveProfileLog set userId = ? where sessionId = ?",[$userId,$self->getId]);
-		}	
+		}
 		delete $self->{_stow};
 		$self->{_user} = $option->{user} || WebGUI::User->new($self, $userId);
 		$self->request->user($self->{_user}->username) if $self->request;
 	} elsif (!exists $self->{_user}) {
 		$self->{_user} = WebGUI::User->new($self, $self->var->get('userId'));
 		$self->request->user($self->{_user}->username) if $self->request;
-	} 
+	}
     return $self->{_user};
 }
 

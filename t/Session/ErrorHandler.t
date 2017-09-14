@@ -226,7 +226,7 @@ my $showDebug = $eh->showDebug;
 ####################################################
 
 my $newSession = WebGUI::Session->open(WebGUI::Test::root, WebGUI::Test::file);
-WebGUI::Test->sessionsToDelete($newSession);
+WebGUI::Test->addToCleanup($newSession);
 my $outputBuffer;
 open my $outputHandle, '>', \$outputBuffer or die "Unable to create scalar filehandle: $!\n";
 $newSession->output->setHandle($outputHandle);
@@ -239,5 +239,3 @@ TODO: {
     ok(0, 'output from fatal when there is a db handler and request present');
 }
 
-END {
-}

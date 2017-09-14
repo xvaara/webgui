@@ -15,12 +15,6 @@ our $I18N = {
 		context => q|commerce setting|
 	},
 
-	'sale notification group' => { 
-		message => q|Sale Notification Group|,
-		lastUpdated => 0,
-		context => q|commerce setting|
-	},
-
 	'error processing payment' => { 
 		message => q|Error Processing Payment|,
 		lastUpdated => 0,
@@ -31,24 +25,6 @@ our $I18N = {
 		message => q|There has been an error processing your payment. Usually this is caused by typing errors. However, there may be a connectivity problem, or your account may not have the funds required to complete this transaction. The error message we received is below. Use your browser's back button to go back and correct mistakes. If this problem persists please contact us.|,
 		lastUpdated => 0,
 		context => q|the description on the error screen|
-	},
-
-	'sale notification group help' => { 
-		message => q|Who should be notified of new transactions?|,
-		lastUpdated => 0,
-		context => q|commerce setting help|
-	},
-
-	'receipt email template' => { 
-		message => q|Receipt Email Template|,
-		lastUpdated => 0,
-		context => q|commerce setting|
-	},
-
-	'receipt email template help' => { 
-		message => q|Which template should be used to generate an email that will be sent to the user to acknowledge their purchase?|,
-		lastUpdated => 0,
-		context => q|commerce setting help|
 	},
 
 	'label' => {
@@ -101,7 +77,7 @@ our $I18N = {
     },
 
     'payment methods' => {
-        message => q|Payment Methods.|,
+        message => q|Payment Methods|,
         lastUpdated => 1213313375,
         context => q|Help body for the email receipt template|,
     },
@@ -117,6 +93,37 @@ our $I18N = {
         lastUpdated => 0,
         context     => q{Link to begin checkout again after failure},
     },
+
+	'template gone' => {
+		message => q|The template for entering in credentials has been deleted.  Please notify the site administrator.|,
+		lastUpdated => 0,
+		context => q|Error message when a template cannot be accessed.|
+	},
+
+	'cart summary variables' => {
+		message => q|Cart Summary Variables|,
+		lastUpdated => 0,
+		context => q|Title for a template variable help page.|
+	},
+
+	'cart summary variables help' => {
+		message => q|These variables should be available in all PayDriver templates, to display the cart summary to the user.|,
+		lastUpdated => 0,
+		context => q|Body for a template variable help page.|
+	},
+
+    'proceedButton' => {
+        message => q|A combined button and form for the user to press when they have reviewed the charges that will be submitted to this payment gateway.|,
+        lastUpdated => 0,
+        context => q|Status message|,
+    },
+
+    'unable to finish transaction' => {
+        message => q|We are unable to lookup the transaction to finish checking out.|,
+        lastUpdated => 0,
+        context => q|Error message when the transaction cannot be looked up.|,
+    },
+
 };
 
 1;

@@ -154,6 +154,24 @@
 #     "password" : "password"
 #     },
 
+# If you have a multi-master set up, you must define increment_step and increment_offset
+# to prevent merge conflicts between the different masters. increment_step should be set
+# to the number of masters, and offset should be unique to each master, starting at 0.
+#
+# So, a 2-master cluster would define:
+#   Master 1:
+#       increment_step: 2
+#       increment_offset: 0
+#   Master 2:
+#       increment_step: 2
+#       increment_offset: 1
+#
+# "db" : {
+#       "increment_step" : 1,
+#       "increment_offset" : 0
+#   },
+
+
 # Set this value if you wish to override all outbound emails to a specific
 # user for testing purposes.
 
@@ -172,7 +190,7 @@
 # List the authentication plug-ins you wish to be available on
 # this site.
 
-"authMethods" : [ "LDAP", "WebGUI" ],
+"authMethods" : [ "LDAP", "WebGUI", "Twitter" ],
 
 # List the merchant gateways you have installed and wish to be
 # available on this site.
@@ -182,6 +200,7 @@
     "WebGUI::Shop::PayDriver::ITransact",
     "WebGUI::Shop::PayDriver::PayPal::PayPalStd",
     "WebGUI::Shop::PayDriver::PayPal::ExpressCheckout",
+    "WebGUI::Shop::PayDriver::CreditCard::AuthorizeNet",
     "WebGUI::Shop::PayDriver::Ogone"
     ],
 
@@ -190,7 +209,9 @@
 
 "shippingDrivers" : [
     "WebGUI::Shop::ShipDriver::FlatRate",
-    "WebGUI::Shop::ShipDriver::USPS"
+    "WebGUI::Shop::ShipDriver::USPS",
+    "WebGUI::Shop::ShipDriver::USPSInternational",
+    "WebGUI::Shop::ShipDriver::UPS"
     ],
 
 # Specify the list of template parsers available in the system.
@@ -399,6 +420,13 @@
       "url" : "^PageUrl(\"\",op=switchOffAdmin);",
       "title" : "^International(12,WebGUI);"
    },
+   "addons" : {
+      "icon" : "addons.png",
+      "uiLevel" : 1,
+      "group" : "12",
+      "url" : "http://www.webgui.org/addons",
+      "title" : "^International(Addons title,WebGUI);"
+   },
    "contentFilters" : {
       "icon" : "contentFilters.gif",
       "uiLevel" : 3,
@@ -460,7 +488,7 @@
    }
 },
 
-# Specify a the list of assets you want to appear in your
+# Specify the list of assets you want to appear in your
 # "New Content" menu categories. See "assetCategories" for details
 # about categories. Each listing has a key of class name, and then
 # has several properties, which are:
@@ -600,6 +628,9 @@
    "WebGUI::Asset::Wobject::Article" : {
       "category" : "basic"
    },
+   "WebGUI::Asset::Wobject::AssetReport" : {
+      "category" : "utilities"
+   },
    "WebGUI::Asset::Wobject::Search" : {
       "category" : "basic"
    },
@@ -662,7 +693,10 @@
    },
    "WebGUI::Asset::Wobject::Map" : {
        "category" : "basic"
-   }
+   },
+   "WebGUI::Asset::Wobject::AssetReport" : {
+      "category" : "utilities"
+   },
 },
 
 # 
@@ -784,11 +818,12 @@
     "AdSpace"          : "AdSpace",
     "AOIHits"          : "AOIHits", 
     "AOIRank"          : "AOIRank", 
+    "AssetProperty"    : "AssetProperty",
     "AssetProxy"       : "AssetProxy", 
     "BackToSite"       : "BackToSite",
     "CanEditText"      : "CanEditText", 
     "CartItemCount"    : "CartItemCount",
-    "ConvertToUTC"     : "ConvertToUTC",
+    "ConvertUTCToTZ"   : "ConvertUTCToTZ",
     "c"                : "c_companyName", 
     "D"                : "D_date", 
     "DeactivateAccount": "DeactivateAccount",
@@ -798,6 +833,7 @@
     "FetchMimeType"    : "FetchMimeType", 
     "FilePump"         : "FilePump", 
     "FileUrl"          : "FileUrl", 
+    "FormField"        : "FormField",
     "GroupAdd"         : "GroupAdd", 
     "GroupDelete"      : "GroupDelete", 
     "GroupText"        : "GroupText", 
@@ -805,18 +841,22 @@
     "If"               : "If",
     "International"    : "International", 
     "LastModified"     : "LastModified", 
+    "LastModifiedBy"   : "LastModifiedBy", 
     "L"                : "L_loginBox", 
     "LoginToggle"      : "LoginToggle", 
     "MiniCart"         : "MiniCart",
     "Page"             : "Page", 
     "PageTitle"        : "PageTitle", 
     "PageUrl"          : "PageUrl", 
+    "PickLanguage"     : "PickLanguage",
     "RandomAssetProxy" : "RandomAssetProxy", 
     "RandomThread"     : "RandomThread", 
+    "RenderThingData"  : "RenderThingData",
     "RootTitle"        : "RootTitle", 
     "r"                : "r_printable", 
     "Spacer"           : "Spacer", 
     "SpectreCheck"     : "SpectreCheck",
+    "TwitterLogin"     : "TwitterLogin", 
     "Thumbnail"        : "Thumbnail", 
     "User"             : "User", 
     "UsersOnline"      : "UsersOnline", 
@@ -857,6 +897,7 @@
         "WebGUI::Workflow::Activity::ArchiveOldStories",
         "WebGUI::Workflow::Activity::ArchiveOldThreads",
         "WebGUI::Workflow::Activity::CalendarUpdateFeeds",
+        "WebGUI::Workflow::Activity::CleanCookieJars",
         "WebGUI::Workflow::Activity::CleanDatabaseCache",
         "WebGUI::Workflow::Activity::CleanFileCache",
         "WebGUI::Workflow::Activity::CleanLoginHistory",
@@ -884,11 +925,15 @@
     "WebGUI::Asset::Wobject::Thingy" : [
         "WebGUI::Workflow::Activity::NotifyAboutThing"
     ],
+    "WebGUI::Asset" : [
+        "WebGUI::Workflow::Activity::UpdateAssetSubscribers"
+    ],
     "WebGUI::User" : [
         "WebGUI::Workflow::Activity::CreateCronJob",
         "WebGUI::Workflow::Activity::NotifyAboutUser",
         "WebGUI::Workflow::Activity::ActivateUser",
         "WebGUI::Workflow::Activity::DeactivateUser",
+        "WebGUI::Workflow::Activity::WaitForUserConfirmation",
         "WebGUI::Workflow::Activity::DeleteUser"
     ],
     "WebGUI::VersionTag" : [
@@ -968,10 +1013,12 @@
     "WebGUI::Content::AssetManager",
     "WebGUI::Content::AssetDiscovery",
     "WebGUI::Content::PassiveAnalytics",
+    "WebGUI::Content::SetLanguage",
     "WebGUI::Content::AjaxI18N",
     "WebGUI::Content::Account",
     "WebGUI::Content::AssetHistory",
     "WebGUI::Content::FilePump",
+    "WebGUI::Content::Wizard",
     "WebGUI::Content::Operation",
     "WebGUI::Content::Setup",
     "WebGUI::Content::Shop",
@@ -1066,5 +1113,19 @@
       "Windows CE",
       "Opera Mini"
    ],
+
+# For the siteIndex content plugin.  Whether or not the auto-generated siteIndex should
+# show hidden pages
+   "siteIndex" : {
+      "showHiddenPages" : 0
+   },
+
+# An array of SPAM words.  Used in the Post and WikiPage to block spam by sending the asset directly
+# to the trash.
+   "spamStopWords" : [
+   ],
+
+# A flag to enable a very simple SSO mechanism using sessionIds.
+   "enableSimpleSSO" : 0
 
 }

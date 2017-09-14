@@ -180,8 +180,9 @@ sub www_view {
                 'WebGUI::Asset::WikiPage',
                 'WebGUI::Asset::Post::Thread',
             ],
-            whereClause   => "asset.createdBy = '$userId' or assetData.ownerUserId = '$userId'",
-            orderByClause => "$sortBy $sortDir"
+            statusToInclude => [ qw/approved archived/ ],
+            whereClause     => "asset.createdBy = '$userId' or assetData.ownerUserId = '$userId'",
+            orderByClause   => "$sortBy $sortDir"
         }
     );
 
@@ -200,12 +201,6 @@ sub www_view {
         my $asset      = WebGUI::Asset->newByDynamicClass( $session, $assetId );
         my $props      = $asset->get;
         $props->{url}  = $asset->getUrl;
-        if (ref $asset eq "WebGUI::Asset::Post") {
-            $asset = $asset->getThread;
-            $props = $asset->get;
-            $props->{className} = "WebGUI::Asset::Post";
-        }
-        
         push(@contribs,$props);
     }
     my $contribsCount  = $p->getRowCount;

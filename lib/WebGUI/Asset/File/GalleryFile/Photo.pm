@@ -114,11 +114,14 @@ sub applyConstraints {
     
     # Update the asset's size and make a thumbnail
     my $maxImageSize    = $gallery->get("imageViewSize") 
-                        || $self->session->setting->get("maxImageSize");
-    my $parameters      = $self->get("parameters");
+                            || $self->session->setting->get("maxImageSize");
     my $storage         = $self->getStorageLocation;
     my $file            = $self->get("filename");
 
+    # Adjust orientation based on exif data. Do this before we start to 
+    # generate resolutions so that all images have the correct orientation.
+    $self->adjustOrientation;
+    
     # Make resolutions before fixing image, so that we can get higher quality 
     # resolutions
     $self->makeResolutions;
@@ -127,10 +130,67 @@ sub applyConstraints {
     $storage->resize( $file, undef, undef, $gallery->get( 'imageDensity' ) );
     $storage->adjustMaxImageSize($file, $maxImageSize);
 
-    $self->generateThumbnail;
-    $self->setSize;
+    $self->generateThumbnail;        
     $self->updateExifDataFromFile;
+    
+    # setSize method is already called by WebGUI::Asset::File::applyConstraints (SUPER)
+    # $self->setSize;
+    
     $self->SUPER::applyConstraints( $options );
+}
+
+#----------------------------------------------------------------------------
+
+=head2 adjustOrientation ( )
+
+Read orientation information from EXIF data and rotate image if required.
+EXIF data is updated to reflect the new orientation of the image.
+
+=cut
+
+sub adjustOrientation {    
+    my $self    = shift;
+    my $storage = $self->getStorageLocation;
+    
+    # Extract orientation information from EXIF data
+    my $exifTool = Image::ExifTool->new;
+    $exifTool->ExtractInfo( $storage->getPath( $self->get('filename') ) );    
+    my $orientation = $exifTool->GetValue('Orientation', 'ValueConv');
+
+    # Check whether orientation information is present and transform image if
+    # required. At the moment we handle only images that need to be rotated by 
+    # (-)90 or 180 deg. Flipping of images is not supported yet.
+    if ( $orientation ) {
+
+        # We are going to update orientation information before the image is
+        # rotated. Otherwise we would have to re-extract EXIF data due to 
+        # manipulation by Image Magick.
+
+        # Update orientation information
+        $exifTool->SetNewValue( 'Exif:Orientation' => 1, Type => 'ValueConv');
+        
+        # Set the following options to make this as robust as possible
+        $exifTool->Options( 'IgnoreMinorErrors', FixBase => '' );
+        # Write updated exif data to disk
+        $exifTool->WriteInfo( $storage->getPath( $self->get('filename') ) );
+        
+        # Log any errors
+        my $error = $exifTool->GetValue('Error');
+        $self->session->log->error( "Error on updating exif data: $error" ) if $error;       
+        
+        # Image rotated by 180°
+        if ( $orientation == 3 || $orientation == 4 ) {
+            $self->rotate(180);
+        }
+        # Image rotated by 90° CCW
+        elsif ( $orientation == 5 || $orientation == 6 ) {            
+            $self->rotate(90);
+        }
+        # Image rotated by 90° CW
+        elsif ( $orientation == 7 || $orientation == 8 ) {
+            $self->rotate(-90);
+        }
+    }    
 }
 
 #-------------------------------------------------------------------
@@ -194,10 +254,11 @@ sub getEditFormUploadControl {
     }
 
     # Control to upload a new file
-    $html .= WebGUI::Form::file( $session, {
-        name        => 'newFile',
-        label       => $i18n->get('new file'),
-        hoverHelp   => $i18n->get('new file description'),
+    $html .= WebGUI::Form::image( $session, {
+        name            => 'newFile',
+        label           => $i18n->get('new file'),
+        hoverHelp       => $i18n->get('new file description'),
+        forceImageOnly  => 1,
     });
 
     return $html;
@@ -236,7 +297,7 @@ sub getExifData {
 =head2 getResolutions ( )
 
 Get an array reference of download resolutions that exist for this image. 
-Does not include the web view image or the thumbnail image.
+Does not include the web view image or the thumbnail images.
 
 =cut
 
@@ -244,8 +305,14 @@ sub getResolutions {
     my $self        = shift;
     my $storage     = $self->getStorageLocation;
 
+    ##Filter out the web view image and thumbnail files.
+    my @resolutions = grep { $_ ne $self->get("filename") } @{ $storage->getFiles };
+
     # Return a list not including the web view image.
-    return [ sort { $a <=> $b } grep { $_ ne $self->get("filename") } @{ $storage->getFiles } ];
+    @resolutions = map  { $_->[1] }
+                   sort { $a->[0] <=> $b->[0] }
+                   map  { my $number = $_; $number =~ s/\.\w+$//; [ $number, $_ ] } @resolutions;
+    return \@resolutions;
 }
 
 #----------------------------------------------------------------------------
@@ -314,6 +381,22 @@ sub getThumbnailUrl {
     );
 }
 
+#-------------------------------------------------------------------
+
+=head2 indexContent ( )
+
+Indexing the content of the Photo. See WebGUI::Asset::indexContent() for 
+additonal details. 
+
+=cut
+
+sub indexContent {
+	my $self = shift;
+	my $indexer = $self->SUPER::indexContent;
+	$indexer->addKeywords($self->get("location"));
+	return $indexer;
+}
+
 #----------------------------------------------------------------------------
 
 =head2 makeResolutions ( [resolutions] )
@@ -327,10 +410,18 @@ contained in.
 sub makeResolutions {
     my $self        = shift;
     my $resolutions = shift;
+    my $session     = $self->session;
     my $error;
 
     croak "Photo->makeResolutions: resolutions must be an array reference"
         if $resolutions && ref $resolutions ne "ARRAY";
+    
+#    # Return immediately if no image is available
+#    if ( $self->get("filename") eq '' )
+#    {
+#        $session->log->error("makeResolutions skipped since no image available");
+#        return;
+#    }        
     
     # Get default if necessary
     $resolutions    ||= $self->getGallery->getImageResolutions;
@@ -362,13 +453,20 @@ Make the default title into the file name minus the extention.
 
 sub processPropertiesFromFormPost {
     my $self    = shift;
+    my $i18n    = WebGUI::International->new( $self->session,'Asset_Photo' );
     my $form    = $self->session->form;
     my $errors  = $self->SUPER::processPropertiesFromFormPost || [];
+
+    # Make sure there is an image file attached to this asset.
+    if ( !$self->get('filename') ) {
+        push @{ $errors }, $i18n->get('error no image');
+    }
 
     # Return if errors
     return $errors if @$errors;
     
     ### Passes all checks
+    
     # If no title was given, make it the file name
     if ( !$form->get('title') ) {
         my $title   = $self->get('filename');
@@ -388,6 +486,29 @@ sub processPropertiesFromFormPost {
     }
 
     return undef;
+}
+
+
+#----------------------------------------------------------------------------
+
+=head2 rotate ( angle )
+
+Rotate the photo clockwise by the specified C<angle> (in degrees) including the
+thumbnail and all resolutions.
+
+=cut
+
+sub rotate {
+    my $self    = shift;
+    my $angle   = shift;
+    my $storage = $self->getStorageLocation;
+    
+    # Rotate all files in the storage
+    foreach my $file (@{$storage->getFiles}) {
+        $storage->rotate($file, $angle);
+    }
+    # Re-create thumbnail
+    $self->generateThumbnail;
 }
 
 #----------------------------------------------------------------------------
@@ -478,10 +599,12 @@ This page is only available to those who can edit this Photo.
 sub www_edit {
     my $self    = shift;
     my $session = $self->session;
-    my $form    = $self->session->form;
+    my $form    = $session->form;
 
-    return $self->session->privilege->insufficient  unless $self->canEdit;
-    return $self->session->privilege->locked        unless $self->canEditIfLocked;
+    return $session->privilege->insufficient  unless $self->canEdit;
+    return $session->privilege->locked        unless $self->canEditIfLocked;
+
+    my $i18n = WebGUI::International->new($session, 'WebGUI');
 
     # Prepare the template variables
     # Cannot get all template vars since they require a storage location, doesn't work for
@@ -510,6 +633,7 @@ sub www_edit {
         $var->{ form_start  } 
             = WebGUI::Form::formHeader( $session, {
                 action      => $self->getParent->getUrl('func=editSave;assetId=new;class='.__PACKAGE__),
+                extras      => 'name="photoAdd"',
             })
             . WebGUI::Form::hidden( $session, {
                 name        => 'ownerUserId',
@@ -521,6 +645,7 @@ sub www_edit {
         $var->{ form_start  } 
             = WebGUI::Form::formHeader( $session, {
                 action      => $self->getUrl('func=editSave'),
+                extras      => 'name="photoEdit"',
             })
             . WebGUI::Form::hidden( $session, {
                 name        => 'ownerUserId',
@@ -531,7 +656,7 @@ sub www_edit {
     $var->{ form_start } 
         .= WebGUI::Form::hidden( $session, {
             name        => "proceed",
-            value       => "showConfirmation",
+            value       => $form->get('proceed') || "showConfirmation",
         });
 
     $var->{ form_end } = WebGUI::Form::formFooter( $session );
@@ -539,7 +664,7 @@ sub www_edit {
     $var->{ form_submit }
         = WebGUI::Form::submit( $session, {
             name        => "submit",
-            value       => "Save",
+            value       => $i18n->get('save'),
         });
 
     $var->{ form_title  }

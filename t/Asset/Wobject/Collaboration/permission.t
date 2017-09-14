@@ -31,10 +31,11 @@ my $node            = WebGUI::Asset->getImportNode( $session );
 my %user;
 $user{"2"}          = WebGUI::User->new( $session, "new" );
 $user{"2"}->addToGroups( ['2'] ); # Registered user
-WebGUI::Test->usersToDelete($user{'2'});
+WebGUI::Test->addToCleanup($user{'2'});
 
 my $versionTag      = WebGUI::VersionTag->getWorking( $session );
 $versionTag->set( { name => "Collaboration Test" } );
+WebGUI::Test->addToCleanup($versionTag);
 
 my @addArgs = ( undef, undef, { skipAutoCommitWorkflows => 1 } );
 
@@ -106,8 +107,4 @@ $maker->prepare( {
     fail        => [ '1', $user{"2"}, ],
 } )->run;
 
-#----------------------------------------------------------------------------
-# Cleanup
-END {
-    $versionTag->rollback;
-}
+#vim:ft=perl

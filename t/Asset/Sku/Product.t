@@ -51,8 +51,9 @@ my $product = $node->addChild({
 is($product->getThumbnailUrl(), '', 'Product with no image1 property returns the empty string');
 
 my $image = WebGUI::Storage->create($session);
-WebGUI::Test->storagesToDelete($image);
+WebGUI::Test->addToCleanup($image);
 $image->addFileFromFilesystem(WebGUI::Test->getTestCollateralPath('lamp.jpg'));
+$image->generateThumbnail('lamp.jpg');
 
 my $imagedProduct = $node->addChild({
     className          => "WebGUI::Asset::Sku::Product",
@@ -65,8 +66,9 @@ ok($imagedProduct->getThumbnailUrl(), 'getThumbnailUrl is not empty');
 is($imagedProduct->getThumbnailUrl(), $image->getThumbnailUrl('lamp.jpg'), 'getThumbnailUrl returns the right path to the URL');
 
 my $otherImage = WebGUI::Storage->create($session);
-WebGUI::Test->storagesToDelete($otherImage);
+WebGUI::Test->addToCleanup($otherImage);
 $otherImage->addFileFromFilesystem(WebGUI::Test->getTestCollateralPath('gooey.jpg'));
+$otherImage->generateThumbnail('gooey.jpg');
 
 ok($imagedProduct->getThumbnailUrl($otherImage), 'getThumbnailUrl with an explicit storageId returns something');
 is($imagedProduct->getThumbnailUrl($otherImage), $otherImage->getThumbnailUrl('gooey.jpg'), 'getThumbnailUrl with an explicit storageId returns the right path to the URL');
@@ -110,7 +112,7 @@ cmp_deeply(
 
 my $tag = WebGUI::VersionTag->getWorking($session);
 $tag->commit;
-WebGUI::Test->tagsToRollback($tag);
+WebGUI::Test->addToCleanup($tag);
 
 ####################################################
 #
@@ -124,7 +126,7 @@ my $newImagedProduct = $imagedProduct->addRevision({title => 'Bible and hammer'}
 like($newImagedProduct->get('image1'), $session->id->getValidator, 'addRevision: new product rev got an image1 storage location');
 isnt($newImagedProduct->get('image1'), $imagedProduct->get('image1'), '... and it is not the same as the old one');
 
-WebGUI::Test->tagsToRollback(WebGUI::VersionTag->getWorking($session));
+WebGUI::Test->addToCleanup(WebGUI::VersionTag->getWorking($session));
 WebGUI::VersionTag->getWorking($session)->commit;
 
 ####################################################
@@ -135,6 +137,7 @@ WebGUI::VersionTag->getWorking($session)->commit;
 
 my $jsonTemplate = $node->addChild({
     className => 'WebGUI::Asset::Template',
+    parser    => 'WebGUI::Asset::Template::HTMLTemplate',
     title     => 'JSON template for Product testing',
     template  => q|
 {
@@ -161,7 +164,7 @@ my $viewProduct = $node->addChild({
 
 my $tag2 = WebGUI::VersionTag->getWorking($session);
 $tag2->commit;
-WebGUI::Test->tagsToRollback($tag2);
+WebGUI::Test->addToCleanup($tag2);
 
 ##Fetch a copy from the db, just like a page fetch
 $viewProduct = WebGUI::Asset->new($session, $viewProduct->getId, 'WebGUI::Asset::Sku::Product');

@@ -56,11 +56,9 @@ An epoch representing the time this asset was created.
 
 =head3 options
 
-A hash reference that allows passed in options to change how this method behaves.
-
-=head4 skipAutoCommitWorkflows
-
-If this is set to 1 assets that normally autocommit their workflows (like CS Posts) won't do that.
+A hash reference that allows passed in options to change how this method behaves.  Currently,
+these options are passed down to L<addRevision>, and are not actually used by C<addChild>.
+Please see the POD for L<addRevision> for a list of options.
 
 =cut
 
@@ -217,36 +215,106 @@ Returns the number of children this asset has. This excludes assets in the trash
 
 =head3 opts
 
-A hashref of options.  Currently only one option is supported.
+A hashref of options.  
 
 =head4 includeTrash
 
 If this value of this hash key is true, then assets in any state will be counted.  Normally,
 only those that are published or achived are counted.
 
+=head4 includeOnlyClasses
+
+Only count these classes. Arrayref of class names
+
+=head4 statusToInclude
+
+Arrayref of status to include
+
 =cut
 
 sub getChildCount {
 	my $self = shift;
-    my $opts = shift || {};
-	my $stateWhere = $opts->{includeTrash} ? '' : "asset.state='published' and";
-	my ($count) = $self->session->db->quickArray("select count(distinct asset.assetId) from asset, assetData where asset.assetId=assetData.assetId and $stateWhere parentId=? and (assetData.status in ('approved', 'archived') or assetData.tagId=?)", [$self->getId, $self->session->scratch->get('versionTag')]);
+    my $opt = shift || {};
+    $opt->{ statusToInclude } ||= [ 'approved', 'archived' ];
+
+    my $db  = $self->session->db;
+    my $sql = "select count(distinct asset.assetId) 
+                from asset, assetData 
+                where asset.assetId=assetData.assetId 
+                    and parentId=? 
+                    and (assetData.status in (" . $db->quoteAndJoin( $opt->{statusToInclude} ) . ") 
+                        or assetData.tagId=?)";
+    my @params  = ( $self->getId, $self->session->scratch->get('versionTag') );
+
+    if ( !$opt->{ includeTrash } ) {
+        $sql .= ' AND asset.state=?';
+        push @params, "published";
+    }
+    # XXX This code is duplicated in getLineageSql and getDescendantCount. Merge the three ways?
+    if ( $opt->{ includeOnlyClasses } ) {
+        my @classes;
+        if ( !ref $opt->{includeOnlyClasses} eq 'ARRAY' ) {
+            @classes = $opt->{includeOnlyClasses};
+        }
+        else {
+            @classes = @{ $opt->{includeOnlyClasses} };
+        }
+        $sql .= "AND className IN (" . join( ',', ("?") x @classes ) . ")";
+        push @params, @classes;
+    }
+	my $count = $self->session->db->quickScalar($sql, \@params);
 	return $count;
 }
 
 #-------------------------------------------------------------------
 
-=head2 getDescendantCount ( )
+=head2 getDescendantCount ( opts )
 
 Returns the number of descendants this asset has. This includes only assets that are published, and not
 in the clipboard or trash.
+
+=head3 opts
+
+=head4 includeOnlyClasses
+
+Only count these classes. Arrayref of class names
+
+=head4 statusToInclude
+
+Arrayref of status to include
 
 =cut
 
 sub getDescendantCount {
 	my $self = shift;
-	my ($count) = $self->session->db->quickArray("select count(distinct asset.assetId) from asset, assetData where asset.assetId=assetData.assetId and asset.state = 'published' and assetData.status in ('approved','archived') and asset.lineage like ?", [$self->get("lineage")."%"]);
-	$count--; # have to subtract self
+        my $opt = shift || {};
+        $opt->{ statusToInclude } ||= [ 'approved', 'archived' ];
+
+        my $db  = $self->session->db;
+
+        my $sql  = "select count(distinct asset.assetId) 
+                    from asset, assetData
+                    where asset.assetId = assetData.assetId 
+                        and asset.assetId != ?
+                        and asset.state = 'published' 
+                        and assetData.status in (" . $db->quoteAndJoin( $opt->{statusToInclude} ) . ") 
+                        and asset.lineage like ? ";
+        my @params = ( $self->getId, $self->get("lineage")."%" );
+
+        # XXX This code is duplicated in getLineageSql and getChildCount. Merge the three ways?
+        if ( $opt->{includeOnlyClasses} ) {
+            my @classes;
+            if ( !ref $opt->{includeOnlyClasses} eq 'ARRAY' ) {
+                @classes = $opt->{includeOnlyClasses};
+            }
+            else {
+                @classes = @{ $opt->{includeOnlyClasses} };
+            }
+            $sql .= "AND className IN (" . join( ',', ("?") x @classes ) . ")";
+            push @params, @classes;
+        }
+
+	my $count = $self->session->db->quickScalar($sql, \@params);
 	return $count;
 }
 
@@ -266,13 +334,15 @@ sub getFirstChild {
 		my $lineage = $assetLineage->{firstChild}{$self->getId};
 		unless ($lineage) {
 			($lineage) = $self->session->db->quickArray("select min(asset.lineage) from asset,assetData where asset.parentId=? and asset.assetId=assetData.assetId and asset.state='published'",[$self->getId]);
-			unless ($self->session->config->get("disableCache")) {
+			if ($lineage && !$self->session->config->get("disableCache")) {
 				$assetLineage->{firstChild}{$self->getId} = $lineage;
 				$self->session->stow->set("assetLineage", $assetLineage);
 			}
 		}
-		$child = WebGUI::Asset->newByLineage($self->session,$lineage);
-		$self->cacheChild(first => $child);
+        if ($lineage) {
+            $child = WebGUI::Asset->newByLineage($self->session,$lineage);
+            $self->cacheChild(first => $child);
+        }
 	}
 	return $child;
 }
@@ -346,10 +416,6 @@ An array reference containing a list of asset classes to remove from the result 
 
 A boolean indicating that we should return objects rather than asset ids.
 
-=head4 returnSQL
-
-A boolean indicating that we should return the sql statement rather than asset ids.
-
 =head4 invertTree
 
 A boolean indicating whether the resulting asset tree should be returned in reverse order.
@@ -372,7 +438,8 @@ A string containing as asset class to join in. There is no real reason to use a 
 
 =head4 whereClause
 
-A string containing extra where clause information for the query.
+A string containing extra WHERE clause information for the query.  The AND conjunction will be added internally, so the clause
+should not start with AND.
 
 =head4 orderByClause 
 
@@ -392,10 +459,6 @@ sub getLineage {
 	my $lineage = $self->get("lineage");
 	
     my $sql = $self->getLineageSql($relatives,$rules);
-
-    unless ($sql) {
-        return [];
-    }
 
 	my @lineage;
 	my %relativeCache;
@@ -519,6 +582,7 @@ An integer describing how many levels of ancestry from the start point that shou
 =head4 excludeClasses
 
 An array reference containing a list of asset classes to remove from the result set. The opposite of the includOnlyClasses rule.
+Each class is internally appended with a SQL wildcard, so any subclass will also be excluded.
 
 =head4 invertTree
 
@@ -664,7 +728,8 @@ sub getLineageSql {
 	}
 	## finish up our where clause
 	if (!scalar(@whereModifiers)) {
-        return "";
+        #Return valid SQL that will never select an asset.
+        return q|select * from asset where assetId="###---###"|;
     }
 	$where .= ' and ('.join(" or ",@whereModifiers).')';
 	if (exists $rules->{whereClause} && $rules->{whereClause}) {
@@ -698,19 +763,25 @@ Returns a 6 digit number with leading zeros of the next rank a child will get.
 =cut
 
 sub getNextChildRank {
-	my $self = shift;	
-	my ($lineage) = $self->session->db->quickArray("select max(lineage) from asset where parentId=?",[$self->getId]);
-	my $rank;
-	if (defined $lineage) {
-		$rank = $self->getRank($lineage);
-		$self->session->errorHandler->fatal("Asset ".$self->getId." has too many children.") if ($rank >= 999998);
-		$rank++;
-	} else {
-		$rank = 1;
-	}
-	return $self->formatRank($rank);
-}
+    my $self = shift;
 
+    # Increment by steps for servers in multi-master DB setups
+    my $inc_step = $self->session->config->get('db/increment_step') || 1;
+    my $inc_offset = $self->session->config->get('db/increment_offset') || 0;
+
+    my ($lineage) = $self->session->db->quickArray("select max(lineage) from asset where parentId=?",[$self->getId]);
+    my $rank;
+    if (defined $lineage) {
+        $rank = $self->getRank($lineage);
+        # Increase rank to next step then add offset
+        $rank += ( $inc_step - $rank % $inc_step ) + $inc_offset;
+        $self->session->errorHandler->fatal("Asset ".$self->getId." has too many children.") if ($rank >= 999999); # Each lineage area is only 6 digits
+    }
+    else {
+        $rank = 1;
+    }
+    return $self->formatRank($rank);
+}
 
 #-------------------------------------------------------------------
 
@@ -823,6 +894,11 @@ sub newByLineage {
 	$class = $assetLineage->{$lineage}{class};
     unless ($id && $class) {
         ($id,$class) = $session->db->quickArray("select assetId, className from asset where lineage=?",[$lineage]);
+        if (!$id || !$class) {
+            $session->errorHandler->error("Couldn't instantiate asset from lineage: ".$lineage. ": class name or assetId missing");
+            return undef;
+        }
+        return undef if !$id || !$class;
         $assetLineage->{$lineage}{id} = $id;
         $assetLineage->{$lineage}{class} = $class;
         $session->stow->set("assetLineage",$assetLineage);
@@ -920,14 +996,21 @@ sub setRank {
 	my $parentLineage = $self->getParentLineage;
 
     my $reverse = ($newRank < $currentRank) ? 1 : 0;
-	my $siblings = $self->getLineage(["siblings"],{returnObjects=>1, invertTree=>$reverse});
 
 	my $temp = substr($self->session->id->generate(),0,6);
 	my $previous = $self->get("lineage");
 	$self->session->db->beginTransaction;
     $outputSub->('moving %s aside', $self->getTitle);
 	$self->cascadeLineage($temp);
-	foreach my $sibling (@{$siblings}) {
+	my $siblingIter = $self->getLineageIterator(["siblings"],{invertTree=>$reverse});
+        while ( 1 ) {
+            my $sibling;
+            eval { $sibling = $siblingIter->() };
+            if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+                $self->session->log->error($x->full_message);
+                next;
+            }
+            last unless $sibling;
 		if (isBetween($sibling->getRank, $newRank, $currentRank)) {
             $outputSub->('moving %s', $sibling->getTitle);
 			$sibling->cascadeLineage($previous);

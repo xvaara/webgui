@@ -43,7 +43,7 @@ our $I18N = {
         context     => q{The name of the payment driver},
     },
     'password' => { 
-        message     => q{Password},
+        message     => q{API Password},
         lastUpdated => 1247254156,
     },
     'password help' => { 
@@ -88,13 +88,37 @@ our $I18N = {
         lastUpdated => 1247253981,
     },
     'user' => { 
-        message     => q{Username},
+        message     => q{API Username},
         lastUpdated => 1247254097,
     },
     'user help' => { 
         message     => q{Username from Paypal credentials},
         lastUpdated => 1247254128,
     },
+
+    'summary template' => {
+        message => q|Summary Template|,
+        lastUpdated => 0,
+        context => q|Form label in the configuration form of the Cash module.|
+    },
+    'summary template help' => {
+        message => q|Pick a template to display the screen where the user confirms the cart summary info and agrees to pay.|,
+        lastUpdated => 0,
+        context => q|Hover help for the summary template field in the configuration form.|
+    },
+ 
+	'Pay' => {
+		message => q|Pay|,
+		lastUpdated => 0,
+		context => q|Button label|
+	},
+
+	'cart summary template' => {
+		message => q|PayPal Express Checkout Cart Summary Template|,
+		lastUpdated => 0,
+		context => q||
+	},
+
 };
 
 1;

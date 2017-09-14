@@ -15,7 +15,7 @@ package WebGUI::Asset;
 =cut
 
 use Carp qw( croak confess );
-use Scalar::Util qw( blessed );
+use Scalar::Util qw( blessed weaken );
 use Clone qw(clone);
 use JSON;
 use HTML::Packer;
@@ -37,9 +37,13 @@ use WebGUI::HTML;
 use WebGUI::HTMLForm;
 use WebGUI::Keyword;
 use WebGUI::ProgressBar;
+use WebGUI::ProgressTree;
+use Monkey::Patch;
+use WebGUI::Fork;
 use WebGUI::Search::Index;
 use WebGUI::TabForm;
 use WebGUI::Utility;
+use WebGUI::PassiveAnalytics::Logging;
 
 =head1 NAME
 
@@ -222,6 +226,10 @@ The "turn admin on" group which is group id 12.
 
 sub canAdd {
     my $className = shift;
+
+    # just in case we get called as object method
+    $className = $className->get('className') if blessed $className;
+
     my $session = shift;
     my $userId = shift || $session->user->userId;
     my $user = WebGUI::User->new($session, $userId);
@@ -326,7 +334,7 @@ sub checkView {
 		return "chunked";
 	} 
     elsif ($var->isAdminOn && $self->get("state") =~ /^clipboard/) { # show em clipboard
-        my $queryFrag = "func=manageTrash";
+        my $queryFrag = "func=manageClipboard";
         if ($self->session->form->process('revision')) {
             $queryFrag .= ";revision=".$self->session->form->process('revision');
         }
@@ -560,6 +568,62 @@ sub definition {
 
 #-------------------------------------------------------------------
 
+=head2 dispatch ( $fragment )
+
+Based on the URL and query parameters in the current request, call internal methods
+like www_view, www_edit, etc.  If no query parameter is present, then it returns the output
+from the www_view method.  If the requested method does not exist in the object, it returns
+the output from the www_view method.
+
+=head3 $fragment
+
+Any leftover part of the requested URL.
+
+=cut
+
+sub dispatch {
+    my ($self, $fragment) = @_;
+    return undef if $fragment;
+    my $session = $self->session;
+    my $state = $self->get('state');
+    ##Only allow interaction with assets in certain states
+    return if $state ne 'published' && $state ne 'archived' && !$session->var->isAdminOn;
+    my $func    = $session->form->param('func') || 'view';
+    my $viewing = $func eq 'view' ? 1 : 0;
+    my $sub     = $self->can('www_'.$func);
+    if (!$sub && $func ne 'view') {
+        $sub     = $self->can('www_view');
+        $viewing = 1;
+    }
+    return undef unless $sub;
+    my $output = eval { $self->$sub(); };
+    if (my $e = Exception::Class->caught('WebGUI::Error::ObjectNotFound::Template')) {
+                                         #WebGUI::Error::ObjectNotFound::Template
+        $session->log->error(sprintf "%s templateId: %s assetId: %s", $e->error, $e->templateId, $e->assetId);
+    }
+    elsif ($@) {
+        my $message = $@;
+        $session->log->warn("Couldn't call method www_".$func." on asset for url: ".$session->url->getRequestedUrl." Root cause: ".$message);
+    }
+    return $output if $output || $viewing;
+    ##No output, try the view method instead
+    $output = eval { $self->www_view };
+    if (my $e = Exception::Class->caught('WebGUI::Error::ObjectNotFound::Template')) {
+        $session->log->error(sprintf "%s templateId: %s assetId: %s", $e->error, $e->templateId, $e->assetId);
+        return "chunked";
+    }
+    elsif ($@) {
+        warn "logged another warn: $@";
+        my $message = $@;
+        $session->log->warn("Couldn't call method www_view on asset for url: ".$session->url->getRequestedUrl." Root cause: ".$@);
+        return "chunked";
+    }
+    return $output;
+}
+
+
+#-------------------------------------------------------------------
+
 =head2 drawExtraHeadTags ( )
 
 Draw the Extra Head Tags.  Done with a customDrawMethod because the Template
@@ -775,6 +839,67 @@ sub fixUrlFromParent {
     return $url;
 }
 
+#-------------------------------------------------------------------
+
+=head2 forkWithStatusPage ($args)
+
+Kicks off a WebGUI::Fork running $method with $args (from the args hashref)
+and redirects to a ProgressTree status page to show the progress. The
+following arguments are required in $args:
+
+=head3 method
+
+The name of the asset method to call
+
+=head3 args
+
+The arguments to pass that method (see WebGUI::Fork)
+
+=head3 plugin
+
+The WebGUI::Operation::Fork plugin to render (e.g. ProgressTree)
+
+=head3 title
+
+An key in Asset's i18n hash for the title of the rendered console page
+
+=head3 redirect
+
+The full url to redirect to after the fork has finished.
+
+=head3 className
+
+The class to call C<method> in, as in
+
+    $className->$method
+
+defaults to the current Asset's classname if left blank.
+
+=cut
+
+sub forkWithStatusPage {
+    my ( $self, $args ) = @_;
+    my $session = $self->session;
+
+    my $className = $args->{className} || $self->get('className');
+    my $process = WebGUI::Fork->start( $session, $className, $args->{method}, $args->{args} );
+
+    if ( my $groupId = $args->{groupId} ) {
+        $process->setGroup($groupId);
+    }
+
+    my $method = $session->form->get('proceed') || 'manageTrash';
+    my $i18n = WebGUI::International->new( $session, 'Asset' );
+    my $pairs = $process->contentPairs(
+        $args->{plugin}, {
+            title   => $i18n->get( $args->{title} ),
+            icon    => 'assets',
+            proceed => $args->{redirect} || '',
+        }
+    );
+    $session->http->setRedirect( $self->getUrl($pairs) );
+    return 'redirect';
+} ## end sub forkWithStatusPage
 
 #-------------------------------------------------------------------
 
@@ -823,6 +948,26 @@ sub getAdminConsole {
 	}
 	$self->{_adminConsole}->setIcon($self->getIcon);
 	return $self->{_adminConsole};
+}
+
+
+#-------------------------------------------------------------------
+
+=head2 getCache ( )
+
+Returns a cache object specific to this asset, and whether or not the request is in SSL mode.
+
+=cut
+
+sub getCache {
+	my $self     = shift;
+    my $session  = $self->session;
+    my $cacheKey = "view_".$self->getId;
+    if ($session->env->sslRequest) {
+        $cacheKey .= '_ssl';
+    }
+    my $cache = WebGUI::Cache->new($session, $cacheKey);
+    return $cache;
 }
 
 
@@ -1076,10 +1221,28 @@ sub getEditForm {
 		}
 	}
 
-	# send back the rendered form
+	# send back the object
 	return $tabform;
 }
 
+sub setupFormField {
+  my ($self, $tabform, $fieldName, $extraFields, $overrides) = @_;
+  my %params = %{$extraFields->{$fieldName}};
+  my $tab = delete $params{tab};
+
+  if (exists $overrides->{fields}{$fieldName}) {
+    my %overrideParams = %{$overrides->{fields}{$fieldName}};
+    my $overrideTab = delete $overrideParams{tab};
+    $tab = $overrideTab if defined $overrideTab;
+    foreach my $key (keys %overrideParams) {
+      (my $canon = $key) =~ s/^-//;
+      $params{$canon} = $overrideParams{$key};
+    }
+  }
+
+  $tab ||= 'properties';
+  return $tabform->getTab($tab)->dynamicField(%params);
+}
 
 #-------------------------------------------------------------------
 
@@ -1204,16 +1367,31 @@ sub getImportNode {
 
 =head2 getIsa ( $session, [ $offset ] )
 
-A class method to return an iterator for getting all Assets by class (and all sub-classes)
-as Asset objects, one at a time.  When the end of the assets is reached, then the iterator
-will close the database handle that it uses and return undef.
+A class method to return an iterator for getting all committed Assets by
+class (and all sub-classes) as Asset objects, one at a time.  When the end
+of the assets is reached, then the iterator will close the database handle
+that it uses and return undef.
+
+Assets are processed in order by revisionDate.  If the iterator cannot
+instanciate an asset, it will not return undef.  Instead, it will throw
+an exception.  This allows the error condition to be distinguished from the
+end of the set of assets.
 
 It should be used like this:
 
-my $productIterator = WebGUI::Asset::Product->getIsa($session);
-while (my $product = $productIterator->()) {
-  ##Do something useful with $product
-}
+    my $productIterator = WebGUI::Asset::Product->getIsa($session);
+    ASSET: while (1) {
+        my $product = eval { $productIterator->() };
+        if (my $e = Exception::Class->caught()) {
+            $session->log->error($@);
+            next ASSET;
+        }
+        last ASSET unless $product;
+        ##Do something useful with $product
+    }
+
+In upgrade scripts, the eval and exception handling are best left off, because it is a good time
+to make the user aware that they have broken assets in their database.
 
 =head3 $session
 
@@ -1224,26 +1402,48 @@ A reference to a WebGUI::Session object.
 An offset, from the beginning of the results returned from the query, to really begin
 returning results.  This allows very large sets of results to be handled in chunks.
 
+=head3 $options
+
+A hashref of options to change how getIsa works.
+
+=head4 returnAll
+
+If set to true, then all assets will be returned, regardless of status and state.
+
 =cut
 
 sub getIsa {
     my $class    = shift;
     my $session  = shift;
     my $offset   = shift;
+    my $options  = shift;
     my $def = $class->definition($session);
     my $tableName = $def->[0]->{tableName};
-    my $sql = "select distinct(assetId) from $tableName";
-    if (defined $offset) {
-        $sql .= ' LIMIT '. $offset . ',1234567890';
+    #Strategy, generate the correct set of assetIds
+    my $sql = "select assetId from assetData as ad ";
+    if ($tableName ne 'assetData') {
+        $sql .= "join `$tableName` using (assetId, revisionDate) ";
     }
-    my $sth = $session->db->read($sql);
+    $sql .= 'WHERE ';
+    if (! $options->{returnAll}) {
+        $sql .= q{(status='approved' OR status='archived') AND };
+    }
+    $sql .= q{revisionDate = (SELECT MAX(revisionDate) FROM assetData AS a WHERE a.assetId = ad.assetId) order by revisionDate };
+    if (defined $offset) {
+        $sql .= 'LIMIT '. $offset . ',1234567890 ';
+    }
+    my $sth    = $session->db->read($sql);
     return sub {
-        my ($assetId) = $sth->array;
+        my ($assetId, $revisionDate) = $sth->array;
         if (!$assetId) {
             $sth->finish;
             return undef;
         }
-        return WebGUI::Asset->newPending($session, $assetId);
+        my $asset = eval { WebGUI::Asset->newPending($session, $assetId); };
+        if (!$asset) {
+            WebGUI::Error::ObjectNotFound->throw(id => $assetId);
+        }
+        return $asset;
     };
 }
 
@@ -1376,6 +1576,21 @@ sub getRoot {
 	my $session = shift;
 	return WebGUI::Asset->new($session, "PBasset000000000000001");
 }
+
+
+#-------------------------------------------------------------------
+
+=head2 getSearchUrl ( )
+
+Returns the URL for the search screen of the asset manager.
+
+=cut
+
+sub getSearchUrl {
+	my $self = shift;
+	return $self->getUrl( 'op=assetManager;method=search' );
+}
+
 
 
 #-------------------------------------------------------------------
@@ -1622,6 +1837,19 @@ sub getContentLastModified {
 
 #-------------------------------------------------------------------
 
+=head2 getContentLastModifiedBy ( )
+
+Returns the userId that modified the content last.
+
+=cut
+
+sub getContentLastModifiedBy {
+        my $self = shift;
+        return $self->get("revisedBy");
+}
+
+#-------------------------------------------------------------------
+
 =head2 getValue ( key )
 
 Tries to look up C<key> in the asset object's property cache.  If it can't find it in there, then it
@@ -1671,22 +1899,11 @@ sub indexContent {
 
 #-------------------------------------------------------------------
 
-=head2 isValidRssItem ( )
-
-Returns true iff this asset should be included in RSS feeds from the
-RSS From Parent asset.  If false, this asset will be ignored when
-generating feeds, even if it appears in the item list.  Defaults to
-true.
-
-=cut
-
-sub isValidRssItem { 1 }
-
-#-------------------------------------------------------------------
-
 =head2 loadModule ( $session, $className ) 
 
-Loads an asset module if it's not already in memory. This is a class method. Returns undef on failure to load, otherwise returns the classname.  Will only load classes in the WebGUI::Asset namespace.
+Loads an asset module if it's not already in memory. This is a class
+method. Returns undef on failure to load, otherwise returns the classname.
+Will only load classes in the WebGUI::Asset namespace.
 
 =cut
 
@@ -1747,11 +1964,8 @@ no revision date is available it will return undef.
 =cut
 
 sub new {
-    my $class           = shift;
-    my $session         = shift;
-    my $assetId         = shift;
-    my $className       = shift;
-    my $revisionDate    = shift;
+    my ( $class, $session, $assetId, $className, $revisionDate ) = @_;
+    weaken( $session );
 
     unless (defined $assetId) {
         $session->errorHandler->error("Asset constructor new() requires an assetId.");
@@ -1789,18 +2003,19 @@ sub new {
             $session->errorHandler->error("Asset $assetId $class $revisionDate is missing properties. Consult your database tables for corruption. ");
             return undef;
         }
+        # Deserialize
+        foreach my $definition (@{ $class->definition($session) }) {
+            foreach my $property (keys %{ $definition->{properties} }) {
+                if ($definition->{properties}->{$property}->{serialize} && $properties->{$property} ne '') {
+                    $properties->{$property} = JSON->new->canonical->decode($properties->{$property});
+                }
+            }
+        }
         $cache->set($properties,60*60*24);
     }
     if (defined $properties) {
         my $object = { _session=>$session, _properties => $properties };
         bless $object, $class;
-        foreach my $definition (@{ $object->definition($session) }) {
-            foreach my $property (keys %{ $definition->{properties} }) {
-                if ($definition->{properties}->{$property}->{serialize} && $object->{_properties}->{$property} ne '') {
-                    $object->{_properties}->{$property} = JSON->new->canonical->decode($object->{_properties}->{$property});
-                }
-            }
-        }
         return $object;
     }	
     $session->errorHandler->error("Something went wrong trying to instanciate a '$className' with assetId '$assetId', but I don't know what!");
@@ -2120,10 +2335,13 @@ filter guidelines).
 
 sub packExtraHeadTags {
     my ( $self, $unpacked ) = @_;
-    return $unpacked if !$unpacked;
+    # If no more unpacked tags, remove the packed tags
+    if ( !$unpacked ) {
+        $self->update({ extraHeadTagsPacked => $unpacked });
+        return;
+    }
     my $packed  = $unpacked;
     HTML::Packer::minify( \$packed, {
-        remove_comments     => 1,
         remove_newlines     => 1,
         do_javascript       => "shrink",
         do_stylesheet       => "minify",
@@ -2261,26 +2479,29 @@ sub processTemplate {
     my $var = shift;
     my $templateId = shift;
     my $template = shift;
+    my $session  = $self->session;
 
     # Sanity checks
     if (ref $var ne "HASH") {
-        $self->session->errorHandler->error("First argument to processTemplate() should be a hash reference.");
+        $session->errorHandler->error("First argument to processTemplate() should be a hash reference.");
         return "Error: Can't process template for asset ".$self->getId." of type ".$self->get("className");
     }
-    $template = WebGUI::Asset->new($self->session, $templateId,"WebGUI::Asset::Template") unless (defined $template);
+    $template = WebGUI::Asset->new($session, $templateId,"WebGUI::Asset::Template") unless (defined $template);
     if (defined $template) {
         $var = { %{ $var }, %{ $self->getMetaDataAsTemplateVariables } };
-        $var->{'controls'} = $self->getToolbar if $self->session->var->isAdminOn;
+        $var->{'controls'}   = $self->getToolbar if $session->var->isAdminOn;
+        $var->{'assetIdHex'} = $session->id->toHex($self->getId);
         my %vars = (
             %{$self->{_properties}},
             'title'     => $self->getTitle,
             'menuTitle' => $self->getMenuTitle,
+            'keywords'  => $self->get('keywords'),
             %{$var},
         );
         return $template->process(\%vars);
     }
     else {
-        $self->session->errorHandler->error("Can't instantiate template $templateId for asset ".$self->getId);
+        $session->errorHandler->error("Can't instantiate template $templateId for asset ".$self->getId);
         my $i18n = WebGUI::International->new($self->session, 'Asset');
         return $i18n->get('Error: Cannot instantiate template').' '.$templateId;
     }
@@ -2384,6 +2605,21 @@ sub purgeCache {
 
 #-------------------------------------------------------------------
 
+=head2 refused ( )
+
+Returns an error message to the user, wrapped in the user's style.  This is most useful for
+handling UI errors.  Privilege errors should be still be sent to $session->privilege.
+
+=cut
+
+sub refused {
+	my ($self) = @_;
+	return $self->{_session};
+}
+
+
+#-------------------------------------------------------------------
+
 =head2 session ( )
 
 Returns a reference to the current session.
@@ -2421,6 +2657,33 @@ sub setSize {
     $self->{_properties}{assetSize} = $size;
 }
 	
+#-------------------------------------------------------------------
+
+=head2 setState ( $state )
+
+Updates the asset table with the new state of the asset.
+
+=cut
+
+sub setState {
+    my ($self, $state) = @_;
+    my $sql = q{
+        UPDATE asset
+        SET    state          = ?,
+               stateChangedBy = ?,
+               stateChanged   = ?
+        WHERE  assetId = ?
+    };
+    my @props = ($state, $self->session->user->userId, time);
+    $self->session->db->write(
+        $sql, [
+            @props,
+            $self->getId,
+        ]
+    );
+    @{$self->{_properties}}{qw(state stateChangedBy stateChanged)} = @props;
+    $self->purgeCache;
+}
 
 #-------------------------------------------------------------------
 
@@ -2527,7 +2790,15 @@ sub update {
 
             # set the property
             if ($propertyDefinition->{serialize}) {
-                $setPairs{$property} = JSON->new->canonical->encode($value);
+                # Only serialize references
+                if ( ref $value ) {
+                    $setPairs{$property} = JSON->new->canonical->encode($value);
+                }
+                # Passing already serialized JSON string
+                elsif ( $value ) {
+                    $setPairs{$property} = $value;
+                    $value = JSON->new->decode( $value ); # for setting in _properties, below
+                }
             }
             else {
                 $setPairs{$property} = $value;
@@ -2629,20 +2900,51 @@ sub view {
 
 =head2 www_add ( )
 
-Adds a new Asset based upon the class of the current form. Returns the Asset calling method www_edit();  The
-new Asset will inherit security and style properties from the current asset, the parent.
+Create a new, unsaved asset with a parent of this asset from C<class>, C<url>, and optional C<prototype> parameters and present the
+edit screen for it.
+Calls C<get_add_instance> to configure the new asset; the default implementation inherits security and 
+style properties from the current asset, the parent.
 
 =cut
 
 sub www_add {
 	my $self = shift;
-	my %prototypeProperties;
     my $class = $self->loadModule($self->session, $self->session->form->process("class","className"));
+	my $prototype = $self->session->form->process('prototype');
+    my $url = scalar($self->session->form->param("url"));
+
     return undef unless (defined $class);
 	return $self->session->privilege->insufficient() unless ($class->canAdd($self->session));
-	if ($self->session->form->process('prototype')) {
-		my $prototype = WebGUI::Asset->new($self->session, $self->session->form->process("prototype"),$class);
-		foreach my $definition (@{$prototype->definition($self->session)}) { # cycle through rather than copying properties to avoid grabbing stuff we shouldn't grab
+
+    my $newAsset = $class->get_add_instance( $self->session, $self, $url, $prototype );
+
+	$newAsset->{_parent} = $self;
+	return $newAsset->www_edit();
+}
+
+#-------------------------------------------------------------------
+
+=head2 get_add_instance ( $session, $parentAsset, $url, $prototype )
+
+Class method.
+Called from C<www_add> by the parent asset on the class of the new asset being constructed.
+Configures the new asset with defaults, including inheriting security and style properties from the current asset.
+C<$prototype> is the optional assetId of an asset to initialize the new asset from.
+
+=cut
+
+sub get_add_instance {
+    my $class = shift;
+    my $session = shift;
+    my $parentAsset = shift;
+    my $url = shift;
+    my $prototype = shift;
+
+	my %prototypeProperties;
+
+	if ($prototype) {
+		my $prototype = WebGUI::Asset->new($session, $prototype, $class);
+		foreach my $definition (@{$prototype->definition($session)}) { # cycle through rather than copying properties to avoid grabbing stuff we shouldn't grab
 			foreach my $property (keys %{$definition->{properties}}) {
 				next if (isIn($property,qw(title menuTitle url isPrototype isPackage)));
 				next if ($definition->{properties}{$property}{noFormPost});
@@ -2650,24 +2952,25 @@ sub www_add {
 			}
 		}
 	}
-	my %properties = (
-		%prototypeProperties,
-		parentId => $self->getId,
-		groupIdView => $self->get("groupIdView"),
-		groupIdEdit => $self->get("groupIdEdit"),
-		ownerUserId => $self->get("ownerUserId"),
-		encryptPage => $self->get("encryptPage"),
-		styleTemplateId => $self->get("styleTemplateId"),
-		printableStyleTemplateId => $self->get("printableStyleTemplateId"),
-		isHidden => $self->get("isHidden"),
-		className=>$class,
-		assetId=>"new",
-		url=>$self->session->form->param("url")
-		);
-	$properties{isHidden} = 1 unless $self->session->config->get("assets/".$class."/isContainer");
-	my $newAsset = WebGUI::Asset->newByPropertyHashRef($self->session,\%properties);
-	$newAsset->{_parent} = $self;
-	return $newAsset->www_edit();
+
+    my %properties = (
+        %prototypeProperties,
+        parentId                 => $parentAsset->getId,
+        groupIdView              => $parentAsset->get("groupIdView"),
+        groupIdEdit              => $parentAsset->get("groupIdEdit"),
+        ownerUserId              => $parentAsset->get("ownerUserId"),
+        encryptPage              => $parentAsset->get("encryptPage"),
+        styleTemplateId          => $parentAsset->get("styleTemplateId"),
+        printableStyleTemplateId => $parentAsset->get("printableStyleTemplateId"),
+        isHidden                 => $parentAsset->get("isHidden"),
+        className                => $class,
+        assetId                  => "new",
+        url                      => $url,
+    );
+    $properties{isHidden} = 1 unless $session->config->get("assets/".$class."/isContainer");
+
+    return WebGUI::Asset->newByPropertyHashRef($session, \%properties);
+
 }
 
 #-------------------------------------------------------------------
@@ -2700,7 +3003,7 @@ sub www_changeUrl {
 	my $i18n = WebGUI::International->new($self->session, "Asset");
 	my $f = WebGUI::HTMLForm->new($self->session, action=>$self->getUrl);
 	$f->hidden(name=>"func", value=>"changeUrlConfirm");
-	$f->hidden(name=>"proceed", value=>$self->session->form->param("proceed"));
+	$f->hidden(name=>"proceed", value=>scalar($self->session->form->param("proceed")));
 	$f->text(name=>"url", value=>$self->get('url'), label=>$i18n->get("104"), hoverHelp=>$i18n->get('104 description'));
 	$f->yesNo(name=>"confirm", value=>0, label=>$i18n->get("confirm change"), hoverHelp=>$i18n->get("confirm change url message"), subtext=>'<br />'.$i18n->get("confirm change url message"));
 	$f->submit;
@@ -2771,14 +3074,16 @@ sub www_editSave {
     my $isNewAsset = $session->form->process("assetId") eq "new" ? 1 : 0;
     return $session->privilege->locked() if (!$self->canEditIfLocked and !$isNewAsset);
     return $session->privilege->insufficient() unless $self->canEdit && $session->form->validToken;
-    if ($self->session->config("maximumAssets")) {
+    if ($self->session->config->get("maximumAssets")) {
         my ($count) = $self->session->db->quickArray("select count(*) from asset");
         my $i18n = WebGUI::International->new($self->session, "Asset");
-        return $self->session->style->userStyle($i18n->get("over max assets")) if ($self->session->config("maximumAssets") <= $count);
+        return $self->session->style->userStyle($i18n->get("over max assets")) if ( $self->session->config->get("maximumAssets") <= $count && $isNewAsset );
     }
     my $object;
     if ($isNewAsset) {
-        $object = $self->addChild({className=>$session->form->process("class","className")});	
+        my $className = $session->form->process("class","className");
+        return $session->privilege->insufficient() if ($isNewAsset && !$className->canAdd($session));
+        $object = $self->addChild({className=> $className});	
         return $self->www_view unless defined $object;
         $object->{_parent} = $self;
         $object->{_properties}{url} = undef;
@@ -2846,6 +3151,10 @@ sub www_editSave {
         $session->asset($object->getParent);
         return $session->asset->www_view;
     }
+    elsif ($proceed eq "editParent") {
+        $session->asset($object->getParent);
+        return $session->asset->www_edit;
+    }    
     elsif ($proceed eq "goBackToPage" && $session->form->process('returnUrl')) {
         $session->http->setRedirect($session->form->process("returnUrl"));
         return undef;
@@ -2865,14 +3174,28 @@ sub www_editSave {
 
 =head2 www_manageAssets ( )
 
-Redirect to the asset manager content handler (for backwards 
-compatibility)
+Redirect to the asset manager content handler (for backwards compatibility)
 
 =cut
 
 sub www_manageAssets {
     my $self = shift;
     $self->session->http->setRedirect( $self->getManagerUrl );
+    return "redirect";
+}
+
+#-------------------------------------------------------------------
+
+=head2 www_searchAssets ( )
+
+Redirect to the asset manager content handler (for backwards 
+compatibility)
+
+=cut
+
+sub www_searchAssets {
+    my $self = shift;
+    $self->session->http->setRedirect( $self->getSearchUrl );
     return "redirect";
 }
 

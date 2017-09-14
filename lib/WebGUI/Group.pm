@@ -21,6 +21,7 @@ use WebGUI::Macro;
 use WebGUI::Utility;
 use WebGUI::Pluggable;
 use WebGUI::International;
+use Scalar::Util qw( weaken );
 
 
 =head1 NAME
@@ -136,7 +137,7 @@ sub addGroups {
 		my $group = WebGUI::Group->new($self->session, $gid);
 		my $recursive = isIn($self->getId, @{$group->getGroupsIn(1)});
         next GROUP if $recursive;
-        $self->session->db->write("insert into groupGroupings (groupId,inGroup) values (?,?)",[$gid, $self->getId]);
+        $self->session->db->write("REPLACE into groupGroupings (groupId,inGroup) values (?,?)",[$gid, $self->getId]);
 	}
 	$self->clearCaches();
 	return 1;
@@ -152,7 +153,7 @@ is updated.
 
 =head3 users 
 
-An array reference containing a list of users.
+An array reference containing a list of userIds.
 
 =head3 expireOffset
 
@@ -168,7 +169,7 @@ sub addUsers {
 	foreach my $uid (@{$users}) {
 		my ($isIn) = $self->session->db->quickArray("select count(*) from groupings where groupId=? and userId=?", [$self->getId, $uid]);
 		unless ($isIn) {
-			$self->session->db->write("insert into groupings (groupId,userId,expireDate) values (?,?,?)", [$self->getId, $uid, (time()+$expireOffset)]);
+			$self->session->db->write("REPLACE into groupings (groupId,userId,expireDate) values (?,?,?)", [$self->getId, $uid, (time()+$expireOffset)]);
 			$self->session->stow->delete("gotGroupsForUser");
 		} else {
 			$self->userGroupExpireDate($uid,(time()+$expireOffset));
@@ -219,6 +220,49 @@ sub autoDelete {
         return $self->get("autoDelete");
 }
 
+#-------------------------------------------------------------------
+
+=head2 cacheGroupings ( user, is_member )
+
+Adds a record to the grouping for this group into the cache.
+
+=head3 user
+
+User object to set cache for
+
+=head3 is_member
+
+Boolean which indicates whether or not the user passed in is a member of this group
+
+=cut
+
+sub cacheGroupings {
+    my $self         = shift;
+	my $session      = $self->session;
+	my $groupId      = $self->getId;
+	my $user         = shift;
+	my $isInGroup    = shift || 0;
+    my $userId       = $user->userId;
+    my $sessionId    = $session->getId;
+
+    ### Undocumented - cache and groupMembers can be passed in if it they are already built.
+    #These exist specifically for WebGUI::User::isInGroup to use and should not be used elsewhere
+    #unless you know what you are doing
+	my $cache        = shift || WebGUI::Cache->new($session,["groupMembers",$groupId]) || {};
+	my $groupMembers = shift || $cache->get;
+
+    #Build cache in a special way for visitors
+	if($userId eq '1') {
+		$groupMembers->{$userId}->{$sessionId} = { isMember => $isInGroup };
+	}
+    else {
+        $groupMembers->{$userId} = { isMember => $isInGroup };
+    }
+
+    if ($self->groupCacheTimeout()) {
+        $cache->set($groupMembers, $self->groupCacheTimeout);
+    }
+}
 
 #-------------------------------------------------------------------
 
@@ -229,15 +273,18 @@ Clears all caches for this group and any ancestor groups of the group.
 =cut
 
 sub clearCaches {
-	my $self = shift;
+	my $self    = shift;
+    my $session = $self->session;
 	##Clear my cache and the cache of all groups above me.
 	my $groups = $self->getAllGroupsFor();
-	foreach my $group ( $self->getId, @{ $groups } ) {
-		WebGUI::Cache->new($self->session, $group)->delete;
+	foreach my $groupId ( $self->getId, @{ $groups } ) {
+		WebGUI::Cache->new($session, $groupId)->delete;
+        WebGUI::Cache->new($session, ["groupMembers", $groupId])->delete;
 	}
-	$self->session->stow->delete("groupObj");
-	$self->session->stow->delete("isInGroup");
-	$self->session->stow->delete("gotGroupsInGroup");
+	$session->stow->delete("groupObj");
+	$session->stow->delete("isInGroup");
+	$session->stow->delete("gotGroupsInGroup");
+    $session->stow->delete("gotGroupsForUser");
 }
 
 #-------------------------------------------------------------------
@@ -523,7 +570,7 @@ sub get {
 
 =head2 getAllGroupsFor ( )
 
-Returns an array reference containing a list of all groups this group is in, recursively.
+Returns an array reference containing a list of all groupIds this group is in, recursively.
 
 =cut
 
@@ -577,16 +624,17 @@ sub getAllUsers {
 		$self->session->errorHandler->fatal("Endless recursive loop detected while determining groups in group.\nRequested groupId: ".$self->getId);
 	}
 	my $groups = $self->getGroupsIn();
-	##Have to iterate twice due to the withoutExpired clause.
 	foreach my $groupId (@{ $groups }) {
 		my $subGroup = WebGUI::Group->new($self->session, $groupId);
         next
             if !$subGroup;
-        push @users, @{ $subGroup->getAllUsers(1, $withoutExpired, $loopCount) };
+        push @users, @{ $subGroup->getAllUsers($withoutExpired, $loopCount) };
 	}
 	my %users = map { $_ => 1 } @users;
 	@users = keys %users;
-	$cache->set(\@users, $self->groupCacheTimeout);
+    if ($self->groupCacheTimeout()) {
+        $cache->set(\@users, $self->groupCacheTimeout);
+    }
 	return \@users;
 }
 
@@ -638,7 +686,7 @@ sub getDatabaseUsers {
 
 =head2 getGroupsFor ( )
 
-Returns an array reference containing a list of groups this group is in.  This method
+Returns an array reference containing a list of groupIds this group is in.  This method
 does not check recursively backwards up the list of groups.
 
 =cut
@@ -712,7 +760,7 @@ Returns the groupId for this group.
 
 sub getId {
 	my $self = shift;
-        return $self->{_groupId};
+    return $self->{_groupId};
 }
 
 
@@ -814,7 +862,7 @@ sub getLDAPUsers {
 	   if($userId) {
 	      push(@ldapUsers,$userId);
 	   } else {
-	      $self->session->errorHandler->warn("Could not find matching userId for dn/uid $person in WebGUI for group $gid");
+	      $self->session->errorHandler->info("Could not find matching userId for dn/uid $person in WebGUI for group $gid");
 	   }
 	}
 	
@@ -935,28 +983,419 @@ sub getUsersNotIn {
     if($groupId eq "") {
         return $self->getUsers($withoutExpired);
     }
+    my $selfWhere;
+    if ( $self->getId ne '2' ) {
+        $selfWhere  = "and groupId=" . $self->session->db->dbh->quote( $self->getId );
+    }
+    else {
+        $selfWhere  = 'and userId != ' . $self->session->db->dbh->quote( "1" );
+    }
 	
     my $expireTime = 0;
 	if ($withoutExpired) {
 		$expireTime = time();
 	}
 
-    my $sql = q{
+    my $sql = qq{
         select
             userId
         from
-            groupings
+            users
+        left join
+            groupings using (userId)
         where
             expireDate > ?
-            and groupId=?
+            $selfWhere
             and userId not in (select userId from groupings where expireDate > ? and groupId=?)
     };
 
-	my @users = $self->session->db->buildArray($sql, [$expireTime,$self->getId,$expireTime,$groupId]);
+	my @users = $self->session->db->buildArray($sql, [$expireTime,$expireTime,$groupId]);
 	return \@users;
 
 }
 
+#-------------------------------------------------------------------
+
+=head2 hasDatabaseUser ( userId )
+
+Determine if the user passed in is a member of this group via a database query.
+
+Membership will always be false if no query or database link has been defined
+for this group.
+
+=head3 userId
+
+id of the user to check for membership
+
+=cut
+
+sub hasDatabaseUser {
+	my $self     = shift;
+    my $userId   = shift;
+    my $session  = $self->session;
+    my $gid      = $self->getId;
+
+    my $query    = $self->get("dbQuery");
+    my $dbLinkId = $self->get("databaseLinkId");
+    return 0 unless ($userId && $query && defined $dbLinkId);
+
+	my $dbLink = WebGUI::DatabaseLink->new($session,$dbLinkId);
+    unless (defined $dbLink) {
+        $session->log->error("The database link ".$dbLinkId." no longer exists even though group ".$gid." references it. Group $gid may not be working correctly");
+        return 0;
+    }
+
+    my $dbh    = $dbLink->db;
+    unless (defined $dbh) {
+        $session->log->error("Link to database established by could not get database handler for group $gid. This group may not be working correctly");
+        $dbLink->disconnect;
+        return 0;
+    }
+
+    WebGUI::Macro::process($self->session,\$query);
+	#Try to speed up the query by adding a userId filter to the where clause
+	if ($query =~ m/^\s*SELECT\s*(.*)\s*FROM/i) {
+		my $uid_ident = $1;
+		$query =~ s/where/where $uid_ident = '$userId' and/i;
+	}
+    my $sth = $dbh->unconditionalRead($query);
+
+    unless(defined $sth) {
+        $session->log->error("Couldn't process unconditional read for database group with group id $gid.  This group may not be working correctly");
+        return 0;
+    }
+
+    unless ($sth->errorCode < 1) {
+        $session->log->warn("There was a problem with the database query for group ID $gid.");
+        return 0;
+    }
+
+    while (my ($uid) = $sth->array) {
+		if ($uid eq $userId) {
+			return 1;
+		}
+    }
+    return 0;
+}
+
+#-------------------------------------------------------------------
+
+=head2 hasIpUser ( userId )
+
+Determine if the user passed in is a member of this group via the lastIP recorded
+in the user's session and this group's IpFilter.
+
+Membership will always be false if no IpFilter has been set
+
+=head3 userId
+
+id of the user to check for membership
+
+=head3 sessionId
+
+id of the session to check for user data.  If no sessionId is passed in, then the
+group's session will be used to find one.
+
+
+=cut
+
+sub hasIpUser {
+	my $self    = shift;
+    my $session = $self->session;
+    my $userId  = shift;
+    my $userSessionId  = shift || $session->getId;
+    
+    my $IpFilter = $self->ipFilter();
+    return 0 unless ($IpFilter && $userId);
+
+	$IpFilter =~ s/\s//g;
+	my @filters = split /;/, $IpFilter;
+
+    my @ips = $session->db->buildArray(
+        q{ select lastIP from userSession where expires > ? and userId = ? and sessionId=?}
+        ,[ time(), $userId, $userSessionId, ]
+    );
+
+	foreach my $ip (@ips) {
+        return 1 if (isInSubnet($ip,\@filters));
+    }
+    
+    return 0;
+}	
+
+
+#-------------------------------------------------------------------
+
+=head2 hasKarmaUser ( userId )
+
+Determine if the user passed in is a member of this group via the their current
+karma setting and this group's karmaThreshold.
+
+If karma is not enabled for this site, membership will always be false.
+
+=head3 userId
+
+id of the user to check for membership
+
+=cut
+
+sub hasKarmaUser {
+	my $self    = shift;
+    my $userId  = shift;
+    my $session = $self->session;
+
+	return 0 unless ($session->setting->get('useKarma') && $userId);
+
+    return $session->db->quickScalar(
+        q{ select count(*) from users where karma >= ? and userId = ? }
+        ,[$self->karmaThreshold,$userId]
+    );
+}
+
+#-------------------------------------------------------------------
+
+=head2 hasLDAPUser ( userId )
+
+Determine if the user passed in is a member of this group via an LDAP
+connection
+
+If ldapLink, ldapGroup, and ldapGroupProperty are not configured for this group
+membership will always be false.
+
+#TODO - change the way this works to search LDAP for the dn associated with the
+userId.  That should speed this up a bunch for people using LDAP groups.
+
+=head3 userId
+
+id of the user to check for membership
+
+=cut
+
+sub hasLDAPUser {
+	my $self                  = shift;
+    my $userId                = shift;
+    my $session               = $self->session;
+	my @ldapUsers             = ();
+	my $gid                   = $self->getId;
+
+	### Check LDAP
+	my $ldapLinkId            = $self->get("ldapLinkId");
+	my $ldapGroup             = $self->get("ldapGroup");
+	my $ldapGroupProperty     = $self->get("ldapGroupProperty");
+    my $ldapRecursiveProperty = $self->get("ldapRecursiveProperty");
+	my $ldapRecurseFilter     = $self->get("ldapRecursiveFilter");
+	
+	return 0 unless ($ldapLinkId && $ldapGroup && $ldapGroupProperty && $userId);
+
+	my $ldapLink = WebGUI::LDAPLink->new($session,$ldapLinkId);
+	unless ($ldapLink && $ldapLink->bind) {
+	   $self->session->errorHandler->warn("There was a problem connecting to LDAP link $ldapLinkId for group ID $gid.");
+	   return 0;
+	}
+		
+	my $people = [];
+	if($ldapRecursiveProperty) {
+	   $ldapLink->recurseProperty($ldapGroup,$people,$ldapGroupProperty,$ldapRecursiveProperty,$ldapRecurseFilter);
+	} else {
+        $people = $ldapLink->getProperty($ldapGroup,$ldapGroupProperty);
+	}
+	$ldapLink->unbind;
+
+    foreach my $person (@{$people}) {
+        $person =~ s/\s*,\s*/,/g;
+        $person = lc($person);
+        my $personRegExp = "^uid=$person,";
+        my $uid = $session->db->quickScalar("select userId from authentication where authMethod='LDAP' and fieldName='connectDN' and lower(fieldData) = ? OR lower(fieldData) REGEXP ?",[$person,$personRegExp]);
+	    return 1 if ($uid eq $userId);
+    }
+	
+	return 0;
+}	
+
+#-------------------------------------------------------------------
+
+=head2 hasScratchUser ( userId, [ $sessionId ] )
+
+Determine if the user passed in is a member of this group via session scratch
+variable settings and this group's scratchFilter.
+
+If no scratchFilter has been set for this group, membership will always be false.
+
+=head3 userId
+
+id of the user to check for membership
+
+=head3 sessionId
+
+id of the session for the user being checked for membership.  If no sessionId is passed in, then the
+group's session will be used to find one.
+
+=cut
+
+sub hasScratchUser {
+	my $self    = shift;
+    my $session = $self->session; 
+    my $userId  = shift;
+    my $userSessionId = shift || $self->session;
+
+	my $scratchFilter = $self->scratchFilter();
+	return 0 unless ($scratchFilter && $userId);
+    
+	$scratchFilter =~ s/\s//g;
+	my @filters = split /;/, $scratchFilter;
+
+	my @scratchClauses      = ();
+	my @scratchPlaceholders = ( $userSessionId, $userId, time() );
+	foreach my $filter (@filters) {
+		my ($name, $value) = split /=/, $filter;
+		push @scratchClauses, "(s.name=? AND s.value=?)";
+		push @scratchPlaceholders, $name, $value;
+	}
+	my $scratchClause = join ' OR ', @scratchClauses;
+    
+	my $query = qq{
+        select
+            count(*)
+        from
+            userSession u, userSessionScratch s
+        where
+            u.sessionId = ? AND
+            u.sessionId=s.sessionId AND
+            u.userId = ? AND
+            u.expires > ? AND
+            ( $scratchClause )
+    };
+
+	return $session->db->quickScalar($query, [ @scratchPlaceholders ]);
+}
+
+
+#-------------------------------------------------------------------
+
+=head2 hasUser ( user )
+
+Determine if the user passed in is a member of one of the special groups
+for this group
+
+=head3 user
+
+user object to check groups for
+
+=cut
+
+sub hasUser {
+	my $self           = shift;
+    my $session        = $self->session;
+    my $user           = shift || WebGUI::User->new($session,3);      #Check the admin account if no user is passed in
+    my $uSessionId     = $user->session->getId;
+	my $gid            = $self->getId;
+	my $db             = $session->db;
+
+	my $uid            = $user->userId;
+    ### Get what's in session cache for this group
+	my $isInGroup      = $session->stow->get("isInGroup", { noclone => 1 }) || {};
+    ### Check to see that we have a cache built for this user
+    my $hasCache       = (exists $isInGroup->{$uid}->{cached});
+	
+    ### Return what is in the cache if we've already cached this group in the session.
+	return $isInGroup->{$uid}->{$gid} if ( exists $isInGroup->{$uid}->{$gid} );
+
+    ### If we dont' have a cache yet, cache all of the groups this user is directly a member of
+    ### this will only happen if there is no cache built for this user and it saves us from running one query per group
+    unless ($hasCache) {
+		### Get the list of groups this user is directly a member of
+		my @groups = $db->buildArray(
+			q{ select groupId from groupings where userId=? and expireDate > ?  }
+			, [$uid,time()]
+		);
+        ### Cache the groupings we find
+        map { $isInGroup->{$uid}->{$_} = 1 } @groups;
+		### Set a cached flag so someone else doesn't accidentally call stow before us and screw our quick caching method
+		$isInGroup->{$uid}->{cached} = 1;
+		### Stow the cache here because we have set the cache for other groups besides this one.
+		$session->stow->set("isInGroup",$isInGroup);
+		### Return if we found the user in this group
+		return 1 if ( $isInGroup->{$uid}->{$gid} );
+	}
+
+    ### User was not found directly in this group.  Create a list of groups to check deeply and add this group to that list
+	my $groupsToCheckDeeply = { $gid => 1 };
+
+	#Made it here because user is not in the group itself.  Now check for direct existance in the sub groups.
+	#Now build a list of the subgroups for this group that the user is part of
+	
+    ### Check all of the sub groups for direct existance, caching all of the subgroups that we do not find the user
+    ### in our list of groups that need to be checked more deeply
+	my @groups = ($gid);  #Start checking sub groups of this group only
+	my $loopLimit = 100;  #Set a loop limit just to be safe
+	while (scalar(@groups) && $loopLimit--) {
+		### Check all of the groups of groups for all of the current @groups array.  The query below
+        ### returns the group that was in the group along with whether or not the user is directly a member
+        my $sqlInStr = $db->quoteAndJoin(\@groups);
+		my $sth = $db->read(
+            qq{ select
+                    groupGroupings.groupId, userId
+                from
+                    groupGroupings
+                    left join groupings on groupGroupings.groupId=groupings.groupId and userId=?
+                where
+                    inGroup in ($sqlInStr)
+            }
+			,[$uid]
+		);
+        ### Create a subgroup cache for this pass of the loop so we know what groups to check next
+		my $subgroupCache = {};
+		while (my ($groupId,$userId) = $sth->array){
+            next if ($subgroupCache->{$groupId});               #Skip subgroups we've already checked - nothing has changed
+			### Return true if we find that the user is in the sub group from the session cache - no need to stow any caches here
+			return 1 if ($isInGroup->{$uid}->{$groupId});
+            ### If the userId field is not null, that means that this user is directly a member of this sub group
+			if($userId) {
+				### Stow the result and return true;
+				$isInGroup->{$uid}->{$groupId} = 1;             #Cache the sub group results
+				$isInGroup->{$uid}->{$gid} = 1;                 #Cache the results for the group we are checking
+				$session->stow->set("isInGroup",$isInGroup);    #Stow the Cache
+				return 1;
+			}
+			### We made it here because the user is not directly in the subgroup.
+			$subgroupCache->{$groupId} = 1;                     #Update the subgroup cache for the next outer loop pass
+			$groupsToCheckDeeply->{$groupId} = 1;               #We need to check this group more deeply
+		}
+        ### Get the next level of sub groups to check from the subgroupCache keys.
+		@groups = keys %{$subgroupCache};
+	}
+
+	### Made it here because the user is not directly in the group itself or directly in any of it's subgroups
+	### We should have a flattened list of groups in this group that we should now check one by one to see if the
+	### user is is a member via one of the other methods available for groups
+
+	foreach my $groupIdInGroup (keys %{$groupsToCheckDeeply}) {
+        ### Instantiate the group
+		my $groupToCheck = __PACKAGE__->new($session,$groupIdInGroup);
+        ### Check the 'has' method for each of the 'other' group methods available for this user
+        ### perform checks in a least -> most expensive manner.  If we find the user, stow the cache and return true
+		if( $groupToCheck->hasIpUser($uid, $uSessionId)
+			|| $groupToCheck->hasKarmaUser($uid)
+			|| $groupToCheck->hasScratchUser($uid, $uSessionId)
+			|| $groupToCheck->hasDatabaseUser($uid)
+			|| $groupToCheck->hasLDAPUser($uid)
+		) {
+			#Found the user in one of the 'other' group methods
+			$isInGroup->{$uid}->{$groupIdInGroup} = 1;   #Cache the results for this group so we don't have to check it again
+			$isInGroup->{$uid}->{$gid} = 1;              #Cache the results for the main group because we found the user in one of the subgroups
+			$session->stow->set("isInGroup",$isInGroup); #Stow the cache
+			return 1;
+		}
+		#Made it here because we did not find the user at all in this subgroup.  Cache the result so we don't have to check this subgroup again.
+		$isInGroup->{$uid}->{$groupIdInGroup} = 0;
+	}
+	
+	#If we made it here, that means the user is not in the group or any of it's sub groups
+	#Cache the result, stow the cache, and return false as this group does not contain the user.
+	$isInGroup->{$uid}->{$gid} = 0;
+	$session->stow->set("isInGroup",$isInGroup);
+	return 0;
+}	
 
 
 #-------------------------------------------------------------------
@@ -1110,6 +1549,7 @@ sub new {
     
     my $class           = shift;
     $self->{_session}   = shift;
+    weaken( $self->{_session} );
 	$self->{_groupId}   = shift;
 	my $override        = shift;
     my $noAdmin         = shift;
@@ -1180,13 +1620,16 @@ sub resetGroupFields {
     my $session = $self->session;
     my $db      = $session->db;
     my $config  = $session->config;
-    my $assets  = $config->get('assets');
     my $tableCache = {};
 
     ##Note, I did assets in SQL instead of using the API because you would have to
     ##instanciate every version of the asset that used the group.  This should be much quicker
-    ASSET: foreach my $asset (keys %{ $assets }) {
-        my $definition = WebGUI::Pluggable::instanciate($asset, 'definition', [$session]);
+    ASSET: foreach my $assetClass ($db->buildArray('SELECT DISTINCT className FROM asset')) {
+        my $definition = eval { WebGUI::Pluggable::instanciate($assetClass, 'definition', [$session]); };
+        if ($@) {
+            $session->log->error("Unable to load className: " . $assetClass . " when looking for asset definitions: " . $@);
+            next ASSET;
+        }
         SUBDEF: foreach my $subdef (@{ $definition }) {
             next SUBDEF if exists $tableCache->{$subdef->{tableName}}; 
             PROP: while (my ($fieldName, $properties) = each %{ $subdef->{properties} }) {
@@ -1235,7 +1678,11 @@ sub resetGroupFields {
             push @activities, @{ $wfActivities };
         }
         foreach my $activity (@activities) {
-            my $definition = WebGUI::Pluggable::instanciate($activity, 'definition', [$session]);
+            my $definition = eval { WebGUI::Pluggable::instanciate($activity, 'definition', [$session]) };
+            if ( $@ ) {
+                $session->log->warn( "Couldn't instanciate activity class $activity to reset groups, skipping..." );
+                next;
+            }
             my $sth = $db->prepare('UPDATE WorkflowActivityData set value=3 where name=? and value=?');
             SUBDEF: foreach my $subdef (@{ $definition }) {
                 PROP: while (my ($fieldName, $properties) = each %{ $subdef->{properties} }) {
@@ -1582,7 +2029,7 @@ sub vitalGroup {
     if (! $groupId && ref $class ) {
         $groupId = $class->getId;
     }
-    return isIn ( $groupId, (1..17), qw/pbgroup000000000000015 pbgroup000000000000016 pbgroup000000000000017 / );
+    return isIn ( $groupId, (1..13), 15,16,17, qw/pbgroup000000000000015 pbgroup000000000000016 pbgroup000000000000017 / );
 }
 
 1;

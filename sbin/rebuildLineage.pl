@@ -10,19 +10,20 @@
 # http://www.plainblack.com                     info@plainblack.com
 #-------------------------------------------------------------------
 
-our ($webguiRoot);
+use strict;
+use File::Basename ();
+use File::Spec;
 
-BEGIN { 
-	$webguiRoot = "..";
-	unshift (@INC, $webguiRoot."/lib"); 
+my $webguiRoot;
+BEGIN {
+    $webguiRoot = File::Spec->rel2abs(File::Spec->catdir(File::Basename::dirname(__FILE__), File::Spec->updir));
+    unshift @INC, File::Spec->catdir($webguiRoot, 'lib');
 }
-
 
 $| = 1;
 
 use Getopt::Long;
 use Pod::Usage;
-use strict;
 use WebGUI::Session;
 use WebGUI::Utility;
 
@@ -41,6 +42,8 @@ pod2usage() unless (defined($configFile) && $configFile ne '');
 
 print "Starting..." unless ($quiet);
 my $session = WebGUI::Session->open($webguiRoot,$configFile);
+# We might take a while, reconnect if we get disconnected for inactivity
+$session->db->dbh->{mysql_auto_reconnect} = 1;
 print "OK\n" unless ($quiet);
 
 print "Looking for descendant replationships...\n" unless ($quiet);

@@ -25,7 +25,10 @@ use WebGUI::International;
 use WebGUI::Asset::Template;
 use WebGUI::Form;
 use WebGUI::Storage;
-use Storable;
+use Test::Deep::NoTest qw(eq_deeply);
+use DateTime::Event::ICal;
+use DateTime::Set;
+use Data::ICal::Entry::Event;
 
 use base 'WebGUI::Asset';
 
@@ -72,6 +75,189 @@ sub addRevision {
     return $newRev;
 }
 
+####################################################################
+
+=head2 add_to_calendar ($iCal)
+
+Build a Data::ICal::Entry::Event object that contains the information for this
+event and add it to the Data::ICal calendar
+
+=head3 $iCal
+
+A Data::ICal object, representing the top-level calendar instance.
+
+=cut
+
+sub add_to_calendar {
+    my $self     = shift;
+    my $session  = $self->session;
+    my $calendar = shift;
+    my $event = Data::ICal::Entry::Event->new();
+    $event->add_properties(
+        'last-modified' => WebGUI::DateTime->new($session, $event->get("revisionDate"))->toIcal,
+        created         => WebGUI::DateTime->new($session, $event->get("creationDate"))->toIcal,
+        sequence        => $self->get('iCalSequenceNumber'),
+        summary         => $self->get('title'),
+        description     => $self->get('description'),
+        location        => $self->get('location'),
+        uid => $self->get('feedUid')
+             ? $self->get('feedUid')
+             : $self->get('assetId') . '@'. $session->config->get("sitename")->[0],
+    );
+    ##WebGUI Specific fields
+    foreach my $prop (qw/groupIdView groupIdEdit url menuTitle timeZone/) {
+        $event->add_property( 'x-webgui-'.lc($prop) => $self->get($prop));
+    }
+    my $eventStart = $self->getIcalStart;
+    my $start_parameters = {};
+    if (! $eventStart =~ /T/) {
+        $start_parameters->{VALUE} = 'DATE';
+    }
+    $event->add_property(dtstart => [ $eventStart, $start_parameters ]);
+    my $eventEnd = $self->getIcalEnd;
+    my $end_parameters = {};
+    if (! $eventEnd =~ /T/) {
+        $end_parameters->{VALUE} = 'DATE';
+    }
+    $event->add_property(dtend => [ $eventEnd, $end_parameters ]);
+    $calendar->add_entry($event);
+}
+
+{
+
+my %dayNamesToICal = (
+    m => 'mo',
+    t => 'tu',
+    w => 'we',
+    r => 'th',
+    f => 'fr',
+    s => 'sa',
+    u => 'su',
+);
+
+my %weekNamesToICal = (
+    first  => 1,
+    second => 2,
+    third  => 3,
+    fourth => 4,
+    fifth  => -1,
+);
+
+my %monthNamesToICal = (
+    jan => 1,
+    feb => 2,
+    mar => 3,
+    apr => 4,
+    may => 5,
+    jun => 6,
+    jul => 7,
+    aug => 8,
+    sep => 9,
+    oct => 10,
+    nov => 11,
+    dec => 12,
+);
+
+####################################################################
+
+=head2 dateSet ( recur, start, end )
+
+Produces a DateTime::Set for the given recurrence (see getRecurrence) spanning
+from start to end (DateTime objects).  End is only required if the recurrence
+does not have an 'endAfter'.  This can be called as a class or object method.
+
+=cut
+
+sub dateSet {
+    my ($self, $recur, $start, $end) = @_;
+
+    my $type = $recur->{recurType};
+    my $interval = $recur->{every};
+    $end or my $count = $recur->{endAfter} or croak('No end for dateSet');
+
+    # The "every n weekdays" concept isn't supported in ical lingo.
+    if ($type eq 'weekday') {
+        my $i      = 0;
+        my $weeks  = int($interval / 5);
+        my $days   = $interval % 5;
+        my $d      = $start->clone;
+        my @dates  = ();
+        my $c = $end ? sub { $d < $end } : sub { $i++ < $count };
+        while ($c->()) {
+            my $dw = $d->dow;
+            my $n  = $days;
+            if ($dw == 6) {
+                $n++;
+            } elsif ($n + $dw > 5) {
+                $n += 2;
+            }
+            $d->add(weeks => $weeks, days => $n);
+            push(@dates, $d->clone);
+        }
+        return DateTime::Set->from_datetimes(dates => \@dates);
+    }
+
+    my %a = (
+        dtstart  => $start,
+        interval => $interval,
+    );
+    if ($end) {
+        $a{until} = $end;
+    }
+    else {
+        $a{count} = $count;
+    }
+
+    my $daynames = [
+        map { $dayNamesToICal{$_} }
+        @{ $recur->{dayNames} }
+    ];
+
+    my $weeknos = [
+        map { $weekNamesToICal{$_} }
+        @{ $recur->{weeks} }
+    ];
+
+    my $monthnos = [
+        map { $monthNamesToICal{$_} }
+        @{ $recur->{months} }
+    ];
+
+    my $day = [ $recur->{dayNumber} ];
+
+    {
+        daily     => sub {
+            $a{freq} = 'daily';
+        },
+        weekly    => sub {
+            $a{freq}  = 'weekly';
+            $a{byday} = $daynames,
+        },
+        monthDay  => sub {
+            $a{freq}       = 'monthly';
+            $a{bymonthday} = $day;
+        },
+        monthWeek => sub {
+            $a{freq}     = 'monthly';
+            $a{byday}    = $daynames;
+            $a{bysetpos} = $weeknos;
+        },
+        yearDay   => sub {
+            $a{freq}       = 'yearly';
+            $a{bymonth}    = $monthnos;
+            $a{bymonthday} = $day;
+        },
+        yearWeek  => sub {
+            $a{freq}     = 'yearly';
+            $a{bymonth}  = $monthnos;
+            $a{byday}    = $daynames;
+            $a{bysetpos} = $weeknos;
+        },
+    }->{$type}->();
+    return DateTime::Event::ICal->recur(%a);
+}
+
+}
 
 ####################################################################
 
@@ -171,8 +357,12 @@ sub definition {
 }
 
 
+#-------------------------------------------------------------------
 
-
+sub duration {
+    my $self  = shift;
+    return $self->getDateTimeEnd - $self->getDateTimeStart;
+}
 
 #-------------------------------------------------------------------
 
@@ -197,7 +387,7 @@ sub canAdd {
 
 =head2 canEdit ( [userId] )
 
-Returns true if the given userId can edit this asset. If userId is not given, 
+Returns true if the given userId can edit this asset. If userId is not given,
 the userId of the current session is used.
 
 Users can edit this event if they are the owner of the event, or if they are
@@ -217,95 +407,89 @@ sub canEdit {
     return $self->getParent->canEdit( $userId );
 }
 
+#-------------------------------------------------------------------
+
+=head2 duplicate ( )
+
+Extend the super class to duplicate the storage location.
+
+=cut
+
+sub duplicate {
+	my $self = shift;
+	my $newAsset = $self->SUPER::duplicate(@_);
+	my $newStorage = $self->getStorageLocation->copy;
+	$newAsset->update({storageId=>$newStorage->getId});
+    my $links = $self->getRelatedLinks('nolimit');
+    my $id    = $self->session->id;
+    foreach my $link (@{ $links }) {
+        $link->{new_event}   = 1;
+        $link->{eventlinkId} = $id->generate;
+        $link->{linkurl}     = $link->{linkURL};
+    }
+    $newAsset->setRelatedLinks($links);
+	return $newAsset;
+}
+
+#-------------------------------------------------------------------
+
+=head2 generateRecurrence (date)
+
+Creates an recurrence event in the parent calendar for the given date
+
+=cut
+
+sub generateRecurrence {
+    my ($self, $start) = @_;
+    my $end = $start + $self->duration;
+    my ($sdb, $edb) = map { $_->ymd } ($start, $end);
+
+    # Only generate if the recurId does not exist on this day
+    my $sql = q{
+        SELECT COUNT(*)
+        FROM   Event
+        WHERE  recurId = ? AND startDate = ?
+    };
+    my $db = $self->session->db;
+    unless ($db->quickScalar($sql, [$self->get('recurId'), $sdb])) {
+        my $child = $self->duplicate({skipAutoCommitWorkflows => 1});
+        $child->update({
+            startDate => $sdb,
+            endDate   => $edb,
+        });
+    }
+}
 
 ####################################################################
 
-=head2 generateRecurringEvents ( )
+=head2 generateRecurringEvents()
 
 Generates Events according to this Event's recurrence pattern.
-
-Will croak on failure.
 
 =cut
 
 sub generateRecurringEvents {
     my $self    = shift;
-    my $parent  = $self->getParent;
-    my $session = $self->session;
+    my $recur   = $self->getRecurrence or croak(
+        'Cannot generate recurring events: Event has no recurrence pattern.'
+    );
 
-    my $properties  = $self->get;
-    my $recurId     = $self->get("recurId");
-    my $recur       = {$self->getRecurrence};
+    my $rstart = WebGUI::DateTime->new($self->session, $recur->{startDate});
+    my $rend   = !$recur->{endAfter} && $self->limitedEndDate($rstart->clone->add(years => 2));
+    my $i      = $self->dateSet($recur, $rstart, $rend)->iterator;
 
-    # This method only works on events that have recurrence patterns
-    if (!$recurId) {
-        croak("Cannot generate recurring events: Event has no recurrence pattern.");
+    while (my $d = $i->next) {
+        $self->generateRecurrence($d);
     }
 
-    # Get the distance between the event startDate and endDate
-    # Include the time, as recurrence can change it when crossing a daylight
-    # savings time border.
-    # TODO: Allow recurrence patterns of less than a single day.
-
-    my $initialStart
-        = WebGUI::DateTime->new($session, $properties->{startDate} . " "
-        . ($properties->{startTime} || "00:00:00"));
-    my $initialEnd
-        = WebGUI::DateTime->new($session, $properties->{endDate} . " "
-        . ($properties->{endTime} || "00:00:00"));
-    my $duration = $initialEnd->subtract_datetime($initialStart);
-
-    my $localTime;
-    if ($properties->{startTime}) {
-        $localTime = $initialStart->clone->set_time_zone($properties->{timeZone})->toMysqlTime;
-    }
-    $properties->{feedUid} = undef;
-
-    my @dates    = $self->getRecurrenceDates;
-
-    for my $date (@dates) {
-        my $startDate;
-        if ($localTime) {
-            $startDate = WebGUI::DateTime->new($session,
-                mysql       => $date . " " . $localTime,
-                time_zone   => $properties->{timeZone},
-            );
-        }
-        else {
-            $startDate = WebGUI::DateTime->new($session, $date." 00:00:00");
-        }
-        my $endDate = $startDate->clone->add($duration);
-        my $dbDate = $startDate->toDatabaseDate;
-        # Only generate if the recurId does not exist on this day
-        my ($exists) 
-            = $session->db->quickArray(
-                "select count(*) from Event where recurId=? and startDate=?",
-                [$properties->{recurId}, $dbDate],
-            );
-
-        if (!$exists) {
-            $properties->{startDate} = $dbDate;
-            $properties->{endDate} = $endDate->toDatabaseDate;
-            if ($localTime) {
-                $properties->{startTime} = $startDate->toDatabaseTime;
-                $properties->{endTime} = $endDate->toDatabaseTime;
-            }
-            my $newEvent = $parent->addChild($properties, undef, undef, { skipAutoCommitWorkflows => 1 });
-        }
-    }
-
-    return $recurId;
+    return $recur->{recurId};
 }
-
-
-
-
 
 ####################################################################
 
 =head2 getAutoCommitWorkflowId
 
-Gets the WebGUI::VersionTag workflow to use to automatically commit Events. 
+Gets the WebGUI::VersionTag workflow to use to automatically commit Events.
 By specifying this method, you activate this feature.
 
 =cut
@@ -328,7 +512,7 @@ sub getAutoCommitWorkflowId {
 
 =head2 getDateTimeStart
 
-Returns a WebGUI::DateTime object based on the startDate and startTime values, 
+Returns a WebGUI::DateTime object based on the startDate and startTime values,
 adjusted for the current user's time zone.
 
 If this is an all-day event, the start time is 00:00:00 and the timezone is not
@@ -367,7 +551,7 @@ sub getDateTimeStart {
 
 =head2 getDateTimeEnd
 
-Returns a WebGUI::DateTime object based on the endDate and endTime values, 
+Returns a WebGUI::DateTime object based on the endDate and endTime values,
 adjusted for the current user's time zone.
 
 If this is an all-day event, the end time is 23:59:59 and the timezone is not
@@ -431,7 +615,7 @@ sub getDateTimeEndNI {
 
 =head2 getEventNext
 
-Gets the event that occurs after this event in the calendar. Returns the 
+Gets the event that occurs after this event in the calendar. Returns the
 Event object.
 
 =cut
@@ -459,26 +643,28 @@ sub getEventNext {
 
 
     my @orderByColumns = (
-        'Event.startDate', 
-        'Event.startTime', 
-        'Event.endDate', 
-        'Event.endDate', 
-        'assetData.title', 
+        'Event.startDate',
+        'Event.startTime',
+        'Event.endDate',
+        'Event.endDate',
+        'assetData.title',
         'assetData.assetId',
     );
 
-    my $events = $self->getLineage(['siblings'], {
-        #returnObjects      => 1,
+    my $events = $self->getLineageIterator(['siblings'], {
         includeOnlyClasses  => ['WebGUI::Asset::Event'],
         joinClass           => 'WebGUI::Asset::Event',
-        orderByClause       => join(",", @orderByColumns), 
+        orderByClause       => join(",", @orderByColumns),
         whereClause         => $where,
         limit               => 1,
     });
 
-
-    return undef unless $events->[0]; 
-    return WebGUI::Asset->newByDynamicClass($self->session,$events->[0]);
+    my $nextEvent;
+    eval { $nextEvent = $events->() };
+    if ( WebGUI::Error->caught('WebGUI::Error::ObjecNotFound') ) {
+        return undef; # Normal error
+    }
+    return $nextEvent;
 }
 
 
@@ -516,16 +702,15 @@ sub getEventPrev {
     $where    .= ")";
 
     my @orderByColumns = (
-        'Event.startDate DESC', 
-        'Event.startTime DESC', 
-        'Event.endDate DESC', 
-        'Event.endDate DESC', 
-        'assetData.title DESC', 
-        'assetData.assetId DESC',    
+        'Event.startDate DESC',
+        'Event.startTime DESC',
+        'Event.endDate DESC',
+        'Event.endDate DESC',
+        'assetData.title DESC',
+        'assetData.assetId DESC',
     );
 
-    my $events    = $self->getLineage(['siblings'], {
-                #returnObjects      => 1,
+    my $events    = $self->getLineageIterator(['siblings'], {
                 includeOnlyClasses  => ['WebGUI::Asset::Event'],
                 joinClass           => 'WebGUI::Asset::Event',
                 orderByClause       => join(",",@orderByColumns),
@@ -533,8 +718,12 @@ sub getEventPrev {
                 limit               => 1,
             });
 
-    return undef unless $events->[0];
-    return WebGUI::Asset->newByDynamicClass($self->session,$events->[0]);
+    my $prevEvent;
+    eval { $prevEvent = $events->() };
+    if ( WebGUI::Error->caught( 'WebGUI::Error::ObjectNotFound' ) ) {
+        return undef; # Normal error
+    }
+    return $prevEvent;
 }
 
 
@@ -613,18 +802,18 @@ sub getIcalEnd {
 
 =head2 getRecurrence
 
-Returns a hash of recurrence information. Some of the keys are only relevant
-to certain recurrence types.
+Returns a hashref of recurrence information. Some of the keys are only
+relevant to certain recurrence types.
 
-B<NOTE: This hash IS GOING TO CHANGE after iCalendar recurrence patterns are 
-implemented using DateTime::Event::ICal, so DO NOT RELY ON THEM. This holds 
+B<NOTE: This hash IS GOING TO CHANGE after iCalendar recurrence patterns are
+implemented using DateTime::Event::ICal, so DO NOT RELY ON THEM. This holds
 true for getRecurrenceFromForm() and setRecurrence().>
 
 =over 8
 
 =item recurType
 
-The recurrence type (daily, weekdays, weekly, monthDay, monthWeek, yearDay, 
+The recurrence type (daily, weekdays, weekly, monthDay, monthWeek, yearDay,
 yearWeek)
 
 =item startDate
@@ -647,7 +836,7 @@ The number of (days, weeks, months, years) between each recurrence.
 
 =item dayNames
 
-A list of day names that this event recurs on. 
+A list of day names that this event recurs on.
 
  u    - Sunday
  m    - Monday
@@ -693,453 +882,115 @@ A list of months that this event recurs on
 =cut
 
 sub getRecurrence {
-    my $self    = shift;
-    #use Data::Dumper;
-    #$self->session->errorHandler->warn("recurId: ".$self->get("recurId"));
-    return () unless $self->get("recurId");
+    my $self = shift;
+    return undef unless $self->get("recurId");
 
-    my %data  
-        = $self->session->db->quickHash(
-            "select * from Event_recur where recurId=?",
-            [$self->get("recurId")]
+    return $self->{recurrence} ||= do {
+        #use Data::Dumper;
+        #$self->session->errorHandler->warn("recurId: ".$self->get("recurId"));
+
+        my %data
+            = $self->session->db->quickHash(
+                "select * from Event_recur where recurId=?",
+                [$self->get("recurId")]
+            );
+
+        my %recurrence = (
+            recurType    => $data{recurType},
         );
 
-    my %recurrence = (
-        recurType    => $data{recurType},
-    );
 
+        # We do not need the recurId, and in fact will screw up our later comparisons
+        delete $data{"recurId"};
 
-    # We do not need the recurId, and in fact will screw up our later comparisons
-    delete $data{"recurId"};
+        my $type        = lc $data{"recurType"};
+        if ($type eq "daily" || $type eq "weekday") {
+            $recurrence{every}     = $data{pattern};
+        }
+        elsif ($type eq "weekly") {
+            #(\d+) ([umtwrfs]+)
+            $data{pattern}          =~ /(\d+) ([umtwrfs]+)/;
+            $recurrence{every}      = $1;
+            $recurrence{dayNames}   = [split //, $2];
+        }
+        elsif ($type eq "monthweek") {
+            #(\d+) (first,second,third,fourth,last) ([umtwrfs]+)
+            $data{pattern}          =~ /(\d+) ([a-z,]+) ([umtwrfs]+)/;
+            $recurrence{every}      = $1;
+            $recurrence{weeks}      = [split /,/, $2];
+            $recurrence{dayNames}   = [split //, $3];
+        }
+        elsif ($type eq "monthday") {
+            #(\d+) on (\d+)
+            $data{pattern}          =~ /(\d+) (\d+)/;
+            $recurrence{every}      = $1;
+            $recurrence{dayNumber}  = $2;
+        }
+        elsif ($type eq "yearweek") {
+            #(\d+) (first,second,third,fourth,last) ([umtwrfs]+)? (jan,feb,mar,apr,may,jun,jul,aug,sep,oct,nov,dec)
+            $data{pattern}          =~ /(\d+) ([a-z,]+) ([umtwrfs]+) ([a-z,]+)/;
+            $recurrence{every}      = $1;
+            $recurrence{weeks}      = [split /,/, $2];
+            $recurrence{dayNames}   = [split //, $3];
+            $recurrence{months}     = [split /,/, $4];
+        }
+        elsif ($type eq "yearday") {
+            #(\d+) on (\d+) (jan,feb,mar,apr,may,jun,jul,aug,sep,oct,nov,dec)
+            $data{pattern}          =~ /(\d+) (\d+) ([a-z,]+)/;
+            $recurrence{every}      = $1;
+            $recurrence{dayNumber}  = $2;
+            $recurrence{months}     = [split /,/, $3];
+        }
 
-    my $type        = lc $data{"recurType"};
-    if ($type eq "daily" || $type eq "weekday") {
-        $recurrence{every}     = $data{pattern};
-    }
-    elsif ($type eq "weekly") {
-        #(\d+) ([umtwrfs]+)
-        $data{pattern}          =~ /(\d+) ([umtwrfs]+)/;
-        $recurrence{every}      = $1;
-        $recurrence{dayNames}   = [split //, $2];
-    }
-    elsif ($type eq "monthweek") {
-        #(\d+) (first,second,third,fourth,last) ([umtwrfs]+)
-        $data{pattern}          =~ /(\d+) ([a-z,]+) ([umtwrfs]+)/;
-        $recurrence{every}      = $1;
-        $recurrence{weeks}      = [split /,/, $2];
-        $recurrence{dayNames}   = [split //, $3];
-    }
-    elsif ($type eq "monthday") {
-        #(\d+) on (\d+)
-        $data{pattern}          =~ /(\d+) (\d+)/;
-        $recurrence{every}      = $1;
-        $recurrence{dayNumber}  = $2;
-    }
-    elsif ($type eq "yearweek") {
-        #(\d+) (first,second,third,fourth,last) ([umtwrfs]+)? (jan,feb,mar,apr,may,jun,jul,aug,sep,oct,nov,dec)
-        $data{pattern}          =~ /(\d+) ([a-z,]+) ([umtwrfs]+) ([a-z,]+)/;
-        $recurrence{every}      = $1;
-        $recurrence{weeks}      = [split /,/, $2];
-        $recurrence{dayNames}   = [split //, $3];
-        $recurrence{months}     = [split /,/, $4];
-    }
-    elsif ($type eq "yearday") {
-        #(\d+) on (\d+) (jan,feb,mar,apr,may,jun,jul,aug,sep,oct,nov,dec)
-        $data{pattern}          =~ /(\d+) (\d+) ([a-z,]+)/;
-        $recurrence{every}      = $1;
-        $recurrence{dayNumber}  = $2;
-        $recurrence{months}     = [split /,/, $3];
-    }
+        $recurrence{startDate} = $data{startDate};
+        if ($data{endDate} && $data{endDate} =~ /^after (\d+)/i) {
+            $recurrence{endAfter}   = $1;
+        }
+        elsif ($data{endDate}) {
+            $recurrence{endDate}    = $data{endDate};
+        }
 
-    $recurrence{startDate} = $data{startDate};
-    if ($data{endDate} && $data{endDate} =~ /^after (\d+)/i) {
-        $recurrence{endAfter}   = $1;
-    }
-    elsif ($data{endDate}) {
-        $recurrence{endDate}    = $data{endDate};
-    }
-
-    return %recurrence;
+        \%recurrence;
+    };
 }
-
-
-
 
 
 ####################################################################
 
-=head2 getRecurrenceDates ( endDate )
+=head2 getRecurrenceDates ()
 
-Gets a series of dates in this event's recurrence pattern, up to the
-calendar's configured "maintainRecurrenceOffset".
-
-This is quite possibly the worst algorithm I've ever created. We should be 
-using DateTime::Event::ICal instead.
+DEPRECATED.  Gets a series of dates in this event's recurrence pattern.  This
+is now implemented in terms of the dateSet method, which is what you should be
+using.  This method remains for backwards compatibility.
 
 =cut
 
 sub getRecurrenceDates {
-    my $self        = shift;
+    my $self  = shift;
+    my $recur = $self->getRecurrence;
+    return undef unless $recur && $recur->{recurType};
 
-    my %date;
-    my $recur       = {$self->getRecurrence};
-    return undef unless $recur->{recurType};
+    my $start = WebGUI::DateTime->new($self->session, "$recur->{startDate} 00:00:00");
 
-    my %dayNames = (
-        1 => "m",
-        2 => "t",
-        3 => "w",
-        4 => "r",
-        5 => "f",
-        6 => "s",
-        7 => "u",
-    );
+    my $end = $recur->{endDate} && WebGUI::DateTime->new($self->session,
+        "$recur->{endDate} 00:00:00");
 
-    my %weeks    = (
-        0        => "first",
-        1        => "second",
-        2        => "third",
-        3        => "fourth",
-        4        => "fifth",
-        );
-
-
-    my $dt          = WebGUI::DateTime->new($self->session, $recur->{startDate}." 00:00:00");
-    my $dt_start    = $dt->clone; # Keep track of the initial start date
-    my $dt_end;
-    if ($recur->{endDate}) {
-        $dt_end = WebGUI::DateTime->new($self->session, $recur->{endDate}." 00:00:00");
-    }
     # Set an end for events with no end
-    # TODO: Get the maintainRecurrenceOffset value 
-    elsif (!$recur->{endDate} && !$recur->{endAfter}) {
-        $dt_end = $dt->clone->add(years=>2);
+    # TODO: Get the maintainRecurrenceOffset value
+    if (!$recur->{endDate} && !$recur->{endAfter}) {
+        $end = $start->clone->add(years=>2);
     }
 
-
-    RECURRENCE: while (1) {
-        ####### daily
-        if ($recur->{recurType} eq "daily") {
-            ### Add date
-            $date{$dt->strftime('%F')}++;
-
-            # Add interval
-            $dt->add(days => $recur->{every});
-
-            # Test for quit
-            if (($recur->{endAfter} && keys %date >= $recur->{endAfter}) || ($dt_end && $dt > $dt_end)) {
-                last RECURRENCE;
-            }
-
-            # Next
-            next RECURRENCE;
-        }
-        ####### weekday
-        elsif ($recur->{recurType} eq "weekday") {
-            my $today    = $dt->day_name;
-
-            # If today is not a weekday
-            unless (grep /$today/i,qw(monday tuesday wednesday thursday friday)) {
-                # Add a day
-                $dt->add(days => 1);
-
-                # Test for quit
-                if (($recur->{endAfter} && keys %date >= $recur->{endAfter}) || ($dt_end && $dt > $dt_end)) {
-                    last RECURRENCE;
-                }
-
-                # next
-                next RECURRENCE;
-            }
-            else {
-                ### Add date
-                $date{$dt->strftime('%F')}++;
-
-                $dt->add(days => $recur->{every});
-
-                # Test for quit
-                if (($recur->{endAfter} && keys %date >= $recur->{endAfter}) || ($dt_end && $dt > $dt_end)) {
-                    last RECURRENCE;
-                }
-
-                # Next
-                next RECURRENCE;
-            }
-        }
-        ####### weekly
-        elsif ($recur->{recurType} eq "weekly") {
-            for (0..6) {   # Work through the week 
-                my $dt_day    = $dt->clone->add(days => $_);
-
-                # If today is past the endDate, quit.
-                last RECURRENCE
-                    if ($recur->{endDate} && $dt_day > $dt_end);
-
-                my $today    = $dayNames{ $dt_day->day_of_week };
-
-                if (grep /$today/i, @{$recur->{dayNames}}) {
-                    ### Add date
-                    $date{$dt_day->strftime('%F')}++;
-                }
-
-                # If occurrences is past the endAfter, quit
-                last RECURRENCE
-                    if ($recur->{endAfter} && keys %date >= $recur->{endAfter});
-            }
-
-            # Add interval
-            $dt->add(weeks => $recur->{every});
-
-            # Test for quit
-            if (($recur->{endAfter} && keys %date >= $recur->{endAfter}) || ($dt_end && $dt > $dt_end)) {
-                last RECURRENCE;
-            }
-
-            # Next
-            next RECURRENCE;
-
-        }
-        ####### monthday
-        elsif ($recur->{recurType} eq "monthDay") {
-            # Pick out the correct day
-            my $startDate    = $dt->year."-".$dt->month."-".$recur->{dayNumber};
-
-            my $dt_day    = WebGUI::DateTime->new($self->session, $startDate." 00:00:00");
-
-            # Only if today is not before the recurrence start
-            if ($dt_day->clone->truncate(to => "day") >= $dt_start->clone->truncate(to=>"day")) {
-                # If today is past the endDate, quit.
-                last RECURRENCE
-                    if ($recur->{endDate} && $dt_day > $dt_end);
-
-                ### Add date
-                $date{$dt_day->strftime('%F')}++;
-            }
-
-            # Add interval
-            $dt->add(months => $recur->{every})->truncate(to => "month");
-
-            # Test for quit
-            if (($recur->{endAfter} && keys %date >= $recur->{endAfter}) || ($dt_end && $dt > $dt_end)) {
-                last RECURRENCE;
-            }
-
-            # Next
-            next RECURRENCE;
-        }
-        ###### monthweek
-        elsif ($recur->{recurType} eq "monthWeek") {
-            # For each week remaining in this month
-            my $dt_week    = $dt->clone;
-            while ($dt->month eq $dt_week->month) {
-                my $week    = int($dt_week->day_of_month / 7);
-
-                if (grep /$weeks{$week}/i, @{$recur->{weeks}}) {
-                    # Pick out the correct days
-                    for (0..6) {   # Work through the week
-                        my $dt_day    = $dt_week->clone->add(days => $_);
-
-                        # If today is past the endDate, quit.
-                        last RECURRENCE
-                            if ($recur->{endDate} && $dt_day > $dt_end);
-
-                        # If today isn't in the month, stop looking
-                        last if ($dt_day->month ne $dt->month);
-
-                        my $today    = $dayNames{ $dt_day->day_of_week };
-
-                        if (grep /$today/i, @{$recur->{dayNames}})
-                        {
-                            ### Add date
-                            $date{$dt_day->strftime('%F')}++;
-                        }
-
-                        # If occurrences is past the endAfter, quit
-                        last RECURRENCE
-                            if ($recur->{endAfter} && keys %date >= $recur->{endAfter});
-                    }
-                }
-
-                # Add a week
-                $dt_week->add(days => 7);
-            }
-
-            ### If last is selected
-            if (grep /last/, @{$recur->{weeks}}) {
-                my $dt_last    = $dt->clone->truncate(to => "month")
-                        ->add(months => 1)->subtract(days => 1);
-
-                for (0..6) {
-                    my $dt_day    = $dt_last->clone->subtract(days => $_);
-
-                    # If today is before the startDate, don't even bother
-                    last if ($dt_day < $dt_start);
-                    # If today is past the endDate, try the next one
-                    next if ($recur->{endDate} && $dt_day > $dt_end);
-
-                    my $today    = $dayNames{ $dt_day->day_of_week };
-
-                    if (grep /$today/i, @{$recur->{dayNames}}) {
-                        ### Add date
-                        $date{$dt_day->strftime('%F')}++;
-                    }
-
-                    # If occurrences is past the endAfter, quit
-                    last RECURRENCE
-                        if ($recur->{endAfter} && keys %date >= $recur->{endAfter});
-                }
-            }
-
-
-            # Add interval
-            $dt->add(months => $recur->{every})->truncate(to => "month");
-
-            # Test for quit
-            if (($recur->{endAfter} && keys %date >= $recur->{endAfter}) || ($dt_end && $dt > $dt_end)) {
-                last RECURRENCE;
-            }
-
-            # Next
-            next RECURRENCE;
-        }
-        ####### yearday
-        elsif ($recur->{recurType} eq "yearDay") {
-            # For each month
-            my $dt_month    = $dt->clone;
-            while ($dt->year eq $dt_month->year) {
-                my $mon        = $dt_month->month_abbr;
-                if (grep /$mon/i, @{$recur->{months}}) {
-                    # Pick out the correct day
-                    my $startDate    = $dt_month->year."-".$dt_month->month."-".$recur->{dayNumber};
-
-                    my $dt_day    = WebGUI::DateTime->new($self->session, $startDate." 00:00:00");
-
-                    # Only if today is not before the recurrence start
-                    if ($dt_day->clone->truncate(to => "day") >= $dt_start->clone->truncate(to=>"day")) {
-                        # If today is past the endDate, quit.
-                        last RECURRENCE
-                            if ($recur->{endDate} && $dt_day > $dt_end);
-
-                        ### Add date
-                        $date{$dt_day->strftime('%F')}++;
-
-                    }
-
-                    # If occurrences is past the endAfter, quit
-                    last RECURRENCE
-                        if ($recur->{endAfter} && keys %date >= $recur->{endAfter});
-                }
-
-                $dt_month->add(months=>1);
-            }
-
-            # Add interval
-            $dt->add(years => $recur->{every})->truncate(to => "year");
-
-            # Test for quit
-            if (($recur->{endAfter} && keys %date >= $recur->{endAfter}) || ($dt_end && $dt > $dt_end)) {
-                last RECURRENCE;
-            }
-
-            # Next
-            next RECURRENCE;
-        }
-        ####### yearweek
-        elsif ($recur->{recurType} eq "yearWeek") {
-            # For each month
-            my $dt_month    = $dt->clone;
-            while ($dt->year eq $dt_month->year) {
-                my $mon        = $dt_month->month_abbr;
-                if (grep /$mon/i, @{$recur->{months}}) {
-                    # For each week remaining in this month
-                    my $dt_week    = $dt_month->clone;
-                    while ($dt_month->month eq $dt_week->month) {
-                        my $week    = int($dt_week->day_of_month / 7);
-
-                        if (grep /$weeks{$week}/i, @{$recur->{weeks}}) {
-                            for (0..6) {   # Work through the week
-                                my $dt_day    = $dt_week->clone->add(days => $_);
-
-                                # If today is past the endDate, quit.
-                                last RECURRENCE
-                                    if ($recur->{endDate} && $dt_day > $dt_end);
-
-                                # If today isn't in the month, stop looking
-                                last if ($dt_day->month ne $dt_month->month);
-
-                                my $today    = $dayNames{ lc $dt_day->day_of_week };
-
-                                if (grep /$today/i, @{$recur->{dayNames}}) {
-                                    ### Add date
-                                    $date{$dt_day->strftime('%F')}++;
-                                }
-
-                                # If occurrences is past the endAfter, quit
-                                last RECURRENCE
-                                    if ($recur->{endAfter} && keys %date >= $recur->{endAfter});
-                            }
-                        }
-
-                        # Next week
-                        $dt_week->add(days => 7);
-                    }
-
-                    ### If last is selected
-                    if (grep /last/, @{$recur->{weeks}}) {
-                        my $dt_last    = $dt_month->clone->add(months => 1)->subtract(days => 1);
-
-                        for (0..6) {
-                            my $dt_day    = $dt_last->clone->subtract(days => $_);
-
-                            # If today is past the endDate, try the next one
-                            next
-                                if ($recur->{endDate} && $dt_day > $dt_end);
-
-                            my $today    = $dayNames{ $dt_day->day_of_week };
-
-                            if (grep /$today/i, @{$recur->{dayNames}}) {
-                                ### Add date
-                                $date{$dt_day->strftime('%F')}++;
-                            }
-
-                            # If occurrences is past the endAfter, quit
-                            last RECURRENCE
-                                if ($recur->{endAfter} && keys %date >= $recur->{endAfter});
-                        }
-                    }
-
-                }
-
-                # Next month
-                $dt_month->add(months=>1);
-            }
-
-            # Add interval
-            $dt->add(years => $recur->{every})->truncate(to => "year");
-
-            # Test for quit
-            if (($recur->{endAfter} && keys %date >= $recur->{endAfter}) || ($dt_end && $dt > $dt_end)) {
-                last RECURRENCE;
-            }
-
-            # Next
-            next RECURRENCE;
-        }
-    }
-
-
-    return sort keys %date;
+    return
+        map { $_->strftime('%F') }
+        $self->dateSet($recur, $start, $end)->as_list;
 }
-
-
-
-
 
 ####################################################################
 
 =head2 getRecurrenceFromForm
 
-Returns a recurrence hash based on the form parameters.
+Returns a recurrence hashref based on the form parameters.
 
 The hash keys are the same as getRecurrence.
 
@@ -1152,7 +1003,7 @@ sub getRecurrenceFromForm {
     my %recurrence        = ();
     my $type        = lc $form->param("recurType");
 
-    return () unless ($type && $type !~ /none/i);
+    return undef unless ($type && $type !~ /none/i);
 
     if ($type eq "daily") {
         if (lc($form->param("recurSubType")) eq "weekday") {
@@ -1208,7 +1059,7 @@ sub getRecurrenceFromForm {
         $recurrence{endAfter} = $form->param("recurEndAfter");
     }
 
-    return %recurrence;
+    return \%recurrence;
 }
 
 
@@ -1225,12 +1076,16 @@ Gets an arrayref of hashrefs of related links.
 
 sub getRelatedLinks {
     my $self    = shift;
+    my $limitflag = shift || 'yes';
 
     my $sth
-        = $self->session->db->prepare( 
+        = $self->session->db->prepare(
             "SELECT * FROM Event_relatedlink WHERE assetId=? ORDER BY sequenceNumber",
         );
     $sth->execute([ $self->getId ]);
+    if( $limitflag eq 'nolimit' ) {
+        return [ map { $sth->hashRef } ( 1..$sth->rows ) ];
+    }
 
     my @links;
     while ( my $link = $sth->hashRef ) {
@@ -1266,7 +1121,7 @@ sub getStorageLocation {
 
 =head2 getTemplateVars
 
-Returns a hash of additional parameters to be used in templates, beyond the 
+Returns a hash of additional parameters to be used in templates, beyond the
 standard definition.
 
 Uses the current user's locale and timezone.
@@ -1283,7 +1138,7 @@ sub getTemplateVars {
     $var{"isPublic"} = 1
         if $self->get("groupIdView") eq "7";
     $var{"groupToView"} = $self->get("groupIdView");
-    $var{"timeZone"}    = $self->get('timeZone');        
+    $var{"timeZone"}    = $self->get('timeZone');
 
     # Start date/time
     my $dtStart    = $self->getDateTimeStart;
@@ -1335,7 +1190,7 @@ sub getTemplateVars {
                                   ;
 
     # Make a Friendly date span.
-    $var{dateSpan}        
+    $var{dateSpan}
         = $var{startDateDayName}.", "
         . $var{startDateMonthName}." "
         . $var{startDateDayOfMonth};
@@ -1371,7 +1226,7 @@ sub getTemplateVars {
     $var{ "urlSearch"   } = $self->getParent->getSearchUrl;
 
     # Related links
-    $var{ relatedLinks } = $self->getRelatedLinks;    
+    $var{ relatedLinks } = $self->getRelatedLinks;
 
     # Attachments
     my $gotImage;
@@ -1391,13 +1246,14 @@ sub getTemplateVars {
                 $var{ "attachment.icon" } = $storage->getFileIconUrl($filename);
                 $var{ "attachment.name" } = $filename;
                 $gotAttachment = 1;
-            }   
+            }
 
             # All attachments get added to the loop
             push @{$var{"attachment_loop"}}, {
                 url         => $storage->getUrl($filename),
                 icon        => $storage->getFileIconUrl($filename),
                 filename    => $filename,
+		extension   => WebGUI::Storage->getFileExtension($filename),
                 thumbnail   => $storage->getThumbnailUrl($filename),
                 isImage     => $storage->isImage($filename),
             };
@@ -1447,15 +1303,34 @@ sub isAllDay {
     return 0;
 }
 
+#-------------------------------------------------------------------
 
+=head2 limitedEndDate ( date )
 
+A datetime object for recurrence end or the supplied date, whichever comes
+first.  If there is a count for the recurrence, there is no end date
+(counted recurrences are always fully generated).
+
+=cut
+
+sub limitedEndDate {
+    my ($self, $limit) = @_;
+    my $recur = $self->getRecurrence;
+    return undef if $recur->{endAfter};
+
+    my $natural = do {
+        my $mysql = $recur->{endDate};
+        $mysql && WebGUI::DateTime->new($self->session, $mysql);
+    };
+    return ($natural and $limit > $natural) ? $natural : $limit;
+}
 
 
 ####################################################################
 
 =head2 prepareView
 
-Prepares the view template to be used later. The template to be used is found 
+Prepares the view template to be used later. The template to be used is found
 from this asset's parent (Usually a Calendar).
 
 If the "print" form parameter is set, will prepare the print template.
@@ -1519,8 +1394,17 @@ sub processPropertiesFromFormPost {
 
     ### Verify the form was filled out correctly...
     my @errors;
-    # If the start date is after the end date
     my $i18n = WebGUI::International->new($session, 'Asset_Event');
+
+    # Verify we got valid dates
+    if ( !eval{ $self->getDateTimeStart; 1 } ) {
+        push @errors, $i18n->get('invalid start date');
+    }
+    if ( !eval{ $self->getDateTimeEnd; 1 } ) {
+        push @errors, $i18n->get('invalid end date');
+    }
+
+    # If the start date is after the end date
     if ($self->get("startDate") gt $self->get("endDate")) {
         push @errors, $i18n->get("The event end date must be after the event start date.");
     }
@@ -1547,10 +1431,14 @@ sub processPropertiesFromFormPost {
         WebGUI::VersionTag->new($session, $self->get('tagId'))->setWorking;
     }
 
-    ### Form is verified
-    # Events are always hidden from navigation
+    ### Form is verified, fix properties
+    if (!$session->form->hasParam('groupIdView')) {
+        $self->update({
+            groupIdView     => $self->getParent->get('groupIdView'),
+        });
+    }
 
-    if (!$self->get("groupIdEdit")) {
+    if (!$session->form->hasParam('groupIdEdit')) {
         my $groupIdEdit =  $self->getParent->get("groupIdEventEdit")
                         || $self->getParent->get("groupIdEdit")
                         ;
@@ -1573,13 +1461,13 @@ sub processPropertiesFromFormPost {
         my $tz    = $self->get('timeZone');
 
         my $dtStart
-            = WebGUI::DateTime->new($session, 
+            = WebGUI::DateTime->new($session,
                 mysql       => $self->get("startDate") . " " . $self->get("startTime"),
                 time_zone   => $tz,
             );
 
         my $dtEnd
-            = WebGUI::DateTime->new($session, 
+            = WebGUI::DateTime->new($session,
                 mysql       => $self->get("endDate") . " " . $self->get("endTime"),
                 time_zone   => $tz,
             );
@@ -1597,7 +1485,7 @@ sub processPropertiesFromFormPost {
     my $assetId = $self->get('assetId');
     my $revisionDate = $self->get('revisionDate');
 
-    $session->db->write("UPDATE Event SET sequenceNumber =? WHERE assetId = ? AND revisionDate =?",[($form->param('sequenceNumber') || $top_val), $assetId, $revisionDate]);
+    $session->db->write("UPDATE Event SET sequenceNumber =? WHERE assetId = ? AND revisionDate =?",[(scalar($form->param('sequenceNumber')) || $top_val), $assetId, $revisionDate]);
 
 
     # Pre-process Related Links and manage changes
@@ -1663,23 +1551,18 @@ sub processPropertiesFromFormPost {
     # Determine if the pattern has changed
     if ($form->param("recurType")) {
         # Create the new recurrence hash
-        my %recurrence_new      = $self->getRecurrenceFromForm;
+        my $recurrence_new      = $self->getRecurrenceFromForm;
         # Get the old recurrence hash and range
-        my %recurrence_old      = $self->getRecurrence;
-
-
-        # Set storable to canonical so that we can compare data structures
-        local $Storable::canonical = 1;
-
+        my $recurrence_old      = $self->getRecurrence;
 
         # Pattern keys
-        if (Storable::freeze(\%recurrence_new) ne Storable::freeze(\%recurrence_old)) {
+        if (!eq_deeply($recurrence_new, $recurrence_old)) {
             # Delete all old events and create new ones
             my $old_id  = $self->get("recurId");
 
             # Set the new recurrence pattern
-            if (%recurrence_new) {
-                my $new_id  = $self->setRecurrence(\%recurrence_new);
+            if ($recurrence_new) {
+                my $new_id  = $self->setRecurrence($recurrence_new);
                 if (! $new_id) {
                     $activeVersionTag->setWorking
                         if $activeVersionTag;
@@ -1695,35 +1578,46 @@ sub processPropertiesFromFormPost {
 
             # Delete old events
             if ($old_id) {
-                my $events = $self->getLineage(["siblings"], {
-                    returnObjects       => 1,
+                my $events = $self->getLineageIterator(["siblings"], {
                     includeOnlyClasses  => ['WebGUI::Asset::Event'],
                     joinClass           => 'WebGUI::Asset::Event',
                     whereClause         => qq{Event.recurId = "$old_id"},
                 });
-                $_->purge for @$events;
+                while ( 1 ) {
+                    my $event;
+                    eval { $event = $events->() };
+                    if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+                        $session->log->error(sprintf "Couldn't instance event asset %s to delete it", $x->id);
+                        next;
+                    }
+                    last unless $event;
+                    $event->purge;
+                }
             }
         }
         else {
             # TODO: Give users a form property to decide what events to update
-            # TODO: Make a workflow activity to do this, so that updating
-            # 1 million events doesn't kill the server.
+            # TODO: Make this use WebGUI::ProgressBar so 1 million events doesn't kill the server.
             # Just update related events
             my %properties    = %{ $self->get };
             delete $properties{startDate};
             delete $properties{endDate};
             delete $properties{url};    # addRevision will create a new url for us
 
-            my $events = $self->getLineage(["siblings"], {
-                #returnObjects       => 1,
+            my $events = $self->getLineageIterator(["siblings"], {
                 includeOnlyClasses  => ['WebGUI::Asset::Event'],
                 joinClass           => 'WebGUI::Asset::Event',
                 whereClause         => q{Event.recurId = "}.$self->get("recurId").q{"},
             });
 
-            for my $eventId (@{$events}) {
-                my $event   = WebGUI::Asset->newByDynamicClass($session, $eventId);
-
+            while ( 1 ) {
+                my $event;
+                eval { $event = $events->() };
+                if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+                    $session->log->error(sprintf "Couldn't instance event asset %s to update it", $x->id);
+                    next;
+                }
+                last unless $event;
                 # Add a revision
                 $properties{ startDate  } = $event->get("startDate");
                 $properties{ endDate    } = $event->get("endDate");
@@ -1749,14 +1643,18 @@ Extent the method from the super class to delete all storage locations.
 =cut
 
 sub purge {
-    my $self = shift;
-    my $sth = $self->session->db->read("select storageId from Event where assetId=?",[$self->getId]);
-    while (my ($storageId) = $sth->array) {
-        my $storage = WebGUI::Storage->get($self->session,$storageId);
+    my $self    = shift;
+    my $id      = $self->getId;
+    my $session = $self->session;
+    my @storageIds = $session->db->buildArray("select storageId from Event where assetId=?",[$id]);
+    my $success    = $self->SUPER::purge;
+    return 0 unless $success;
+    foreach my $storageId (@storageIds) {
+        my $storage = WebGUI::Storage->get($session, $storageId);
         $storage->delete if defined $storage;
     }
-    $sth->finish;
-    return $self->SUPER::purge;
+    $session->db->write('delete from Event_relatedlink where assetId=?',[$id]);
+    return 1;
 }
 
 #-------------------------------------------------------------------
@@ -1777,7 +1675,7 @@ sub purgeRevision {
 
 =head2 setRecurrence ( hashref )
 
-Sets a hash of recurrence information to the database. The hash keys are the 
+Sets a hash of recurrence information to the database. The hash keys are the
 same as the ones in getRecurrence()
 
 This will always create a new row in the recurrence table.
@@ -1845,13 +1743,11 @@ sub setRecurrence {
     ## Set to the database
     ## Return the new recurId
     my $recurId = $self->session->db->setRow("Event_recur","recurId",$data);
-    $self->update({recurId => $recurId}); 
+    $self->update({recurId => $recurId});
+
+    $self->{recurrence} = $vars;
     return $recurId;
 }
-
-
-
-
 
 ####################################################################
 
@@ -1905,8 +1801,33 @@ Wrap update so that isHidden is always set to be a 1.
 =cut
 
 sub update {
-    my $self = shift;
+    my $self       = shift;
     my $properties = shift;
+    my $session    = $self->session;
+    if (my $startTime = $properties->{startTime}) {
+        my ($startHour, $startMinute, $startSecond) = $startTime =~ /^ (\d+) : (\d+) (?: :(\d+)) /x;
+        if ($startHour > 23) {
+            $startHour = 0;
+            my $startDate = exists $properties->{startDate} ? $properties->{startDate} : $self->get('startDate');
+            my $startDt = WebGUI::DateTime->new($session, $startDate);
+            $startDt->add(days => 1);
+            $properties->{startDate} = $startDt->toMysqlDate;
+            $startSecond             = '00' if ! $startSecond;
+            $properties->{startTime} = sprintf '%02d:%02d:%02d', $startHour, $startMinute, $startSecond;
+        }
+    }
+    if (my $endTime = $properties->{endTime}) {
+        my ($endHour, $endMinute, $endSecond) = $endTime =~ /^ (\d+) : (\d+) (?: :(\d+)) /x;
+        if ($endHour > 23) {
+            $endHour = 0;
+            my $endDate = exists $properties->{endDate} ? $properties->{endDate} : $self->get('endDate');
+            my $endDt = WebGUI::DateTime->new($session, $endDate);
+            $endDt->add(days => 1);
+            $properties->{endDate} = $endDt->toMysqlDate;
+            $endSecond             = '00' if ! $endSecond;
+            $properties->{endTime} = sprintf '%02d:%02d:%02d', $endHour, $endMinute, $endSecond;
+        }
+    }
     return $self->SUPER::update({%$properties, isHidden => 1});
 }
 
@@ -1996,7 +1917,7 @@ sub www_edit {
     my $func        = lc $session->form->param("func");
     my $var         = {};
 
-    return $self->session->privilege->noAccess() unless $self->getParent->canAddEvent();    
+    return $self->session->privilege->noAccess() unless $self->getParent->canAddEvent();
 
     if ($func eq "add" || $form->param("assetId") eq "new") {
         $var->{"formHeader"}
@@ -2018,7 +1939,7 @@ sub www_edit {
             ;
     }
     else {
-        $var->{"formHeader"} 
+        $var->{"formHeader"}
             = WebGUI::Form::formHeader($session, {
                 action      => $self->getUrl,
             })
@@ -2055,7 +1976,7 @@ sub www_edit {
         });
 
     # menu title AS short title
-    $var->{"formMenuTitle"} 
+    $var->{"formMenuTitle"}
         = WebGUI::Form::text($session, {
             name        => "menuTitle",
             value       => $form->process("menuTitle") || $self->get("menuTitle"),
@@ -2063,8 +1984,15 @@ sub www_edit {
             size        => 22,
         });
 
+    # synopsis
+    $var->{"formSynopsis"}
+        = WebGUI::Form::textarea($session, {
+            name        => "synopsis",
+            value       => $form->process("synopsis") || $self->get("synopsis"),
+        });
+
     # Group to View
-    $var->{"formGroupIdView"} 
+    $var->{"formGroupIdView"}
         = WebGUI::Form::Group($session, {
             name         => "groupIdView",
             value        => $form->process("groupIdView") || $self->get("groupIdView"),
@@ -2124,8 +2052,8 @@ sub www_edit {
 
     # Try to get a default start date from the form
     if ($session->form->param("start")) {
-        $default_start 
-            = WebGUI::DateTime->new($session, 
+        $default_start
+            = WebGUI::DateTime->new($session,
                 mysql       => $session->form->param("start"),
                 time_zone   => $tz,
             );
@@ -2153,7 +2081,7 @@ sub www_edit {
             value           => $form->param("startDate") || $startDate,
             defaultValue    => $default_start->toUserTimeZoneDate,
         });
-    $var->{"formStartTime"} 
+    $var->{"formStartTime"}
         = WebGUI::Form::timeField($session, {
             name            => "startTime",
             value           => $form->param("startTime") || $startTime,
@@ -2177,19 +2105,19 @@ sub www_edit {
         }
     }
 
-    $var->{"formEndDate"}    
+    $var->{"formEndDate"}
         = WebGUI::Form::date($session, {
             name            => "endDate",
             value           => $form->param("endDate") || $endDate,
             defaultValue    => $default_end->toUserTimeZoneDate,
         });
-    $var->{"formEndTime"} 
+    $var->{"formEndTime"}
         = WebGUI::Form::timeField($session, {
             name            => "endTime",
             value           => $form->param("endTime") || $endTime,
             defaultValue    => $default_end->toUserTimeZoneTime,
         });
-    $var->{"formTimeZone"} 
+    $var->{"formTimeZone"}
         = WebGUI::Form::TimeZone($session, {
             name    => "timeZone",
             value   => $tz,
@@ -2198,26 +2126,27 @@ sub www_edit {
 
     # time
     my $allday  = defined $form->param("allday")
-                ? $form->param("allday") 
+                ? $form->param("allday")
                 : $self->isAllDay
                 ;
 
+    my $i18n = WebGUI::International->new($session, 'Asset_Event');
     $var->{"formTime"}
         = q|<input id="allday_yes" type="radio" name="allday" value="yes" |
         . ($allday ? 'checked="checked"' : '')
         . q| />
-        <label for="allday_yes">No specific time (All day event)</label>
+        <label for="allday_yes">|. $i18n->get('No specific time'). q|</label>
         <br/>
         <input id="allday_no" type="radio" name="allday" value="" |
         . (!$allday ? 'checked="checked"' : '')
         . q| />
-        <label for="allday_no">Specific start/end time</label>
+        <label for="allday_no">|. $i18n->get('Specific start/end time'). q|</label>
         <br />
         <div id="times">|
-        . q|Start: |.$var->{"formStartTime"}
-        . q|<br/>End: |.$var->{"formEndTime"}
-        . q|<br/>Time Zone: |.$var->{formTimeZone}
-        . q|</div>|;
+        . $i18n->get('start')               . q|: | . $var->{"formStartTime"} . q|<br/>|
+        . $i18n->get('end')                 . q|: | . $var->{"formEndTime"}   . q|<br/>|
+        . $i18n->get('timezone', 'DateTime'). q|: | . $var->{formTimeZone}    . q|</div>|
+        ;
 
     ###### related links
     my $relatedLinks = $self->getRelatedLinks();
@@ -2234,8 +2163,8 @@ sub www_edit {
             value        => $form->process("rel_group_id_".$_->{eventlinkId}) || $_->{groupIdView} || $self->getParent->get("groupIdView"),
             defaultValue => $self->getParent->get("groupIdView"),
         });
-       $_->{seq_num_name} = "rel_seq_".$_->{eventlinkId};
-       $_->{seq_num_id} = "rel_seq_id_".$_->{eventlinkId};
+       $_->{seq_num_name}  = "rel_seq_".$_->{eventlinkId};
+       $_->{seq_num_id}    = "rel_seq_id_".$_->{eventlinkId};
        $_->{seq_num_value} = $seqNum++;
     }
     $var->{"relatedLinks"} = $relatedLinks;
@@ -2251,132 +2180,130 @@ sub www_edit {
 
     ###### Recurrence tab
     # Pattern
-    my %recur = $self->getRecurrenceFromForm || $self->getRecurrence;
-    $recur{every} ||= 1;
+    my $recur = $self->getRecurrenceFromForm || $self->getRecurrence;
+    $recur->{every} ||= 1;
 
-    $var->{"formRecurPattern"}    
+    $var->{"formRecurPattern"}
         = q|
         <div id="recurPattern">
         <p><input type="radio" name="recurType" id="recurType_none" value="none" onclick="toggleRecur()" />
-        <label for="recurType_none">None</label></p>
+        <label for="recurType_none">|. $i18n->get(881,'WebGUI'). q|</label></p>
 
 
-        <p><input type="radio" name="recurType" id="recurType_daily" value="daily" onclick="toggleRecur()"  |.($recur{recurType} =~ /^(daily|weekday)$/ ? q|checked="checked"| : q||).q|/>
-        <label for="recurType_daily">Daily</label></p>
+        <p><input type="radio" name="recurType" id="recurType_daily" value="daily" onclick="toggleRecur()"  |.($recur->{recurType} =~ /^(daily|weekday)$/ ? q|checked="checked"| : q||).q|/>
+        <label for="recurType_daily">|. $i18n->get('Daily'). q|</label></p>
         <div style="margin-left: 4em;" id="recurPattern_daily">
-            Every <input type="text" name="recurDay" size="3" value="|.$recur{every}.q|" /><br/>
-            <input type="radio" name="recurSubType" id="recurSubType_daily" value="daily" |.($recur{recurType} eq "daily" ? q|checked="checked"| : q||).q|/>
-            <label for="recurSubType_daily">Day(s)</label><br />
-            <input type="radio" name="recurSubType" id="recurSubType_weekday" value="weekday" |.($recur{recurType} eq "weekday" ? q|checked="checked"| : q||).q|/>
-            <label for="recurSubType_weekday">Weekday(s)</label>
+            |. $i18n->get('Every'). q| <input type="text" name="recurDay" size="3" value="|.$recur->{every}.q|" /><br/>
+            <input type="radio" name="recurSubType" id="recurSubType_daily" value="daily" |.($recur->{recurType} eq "daily" ? q|checked="checked"| : q||).q|/>
+            <label for="recurSubType_daily">|. $i18n->get(700, 'WebGUI'). q|</label><br />
+            <input type="radio" name="recurSubType" id="recurSubType_weekday" value="weekday" |.($recur->{recurType} eq "weekday" ? q|checked="checked"| : q||).q|/>
+            <label for="recurSubType_weekday">|. $i18n->get('Weekday(s)'). q|</label>
         </div>
 
-
-        <p><input type="radio" name="recurType" id="recurType_weekly" value="weekly" onclick="toggleRecur()" |.($recur{recurType} eq "weekly" ? q|checked="checked"| : q||).q|/>
-        <label for="recurType_weekly">Weekly</label></p>
+        <p><input type="radio" name="recurType" id="recurType_weekly" value="weekly" onclick="toggleRecur()" |.($recur->{recurType} eq "weekly" ? q|checked="checked"| : q||).q|/>
+        <label for="recurType_weekly">|. $i18n->get('Weekly'). q|</label></p>
         <div style="margin-left: 4em;" id="recurPattern_weekly">
-            Every <input type="text" name="recurWeek" size="3" value="|.$recur{every}.q|" /> week(s) on<br/>
-            <input type="checkbox" name="recurWeekDay" value="u" id="recurWeekDay_U" |.(grep(/u/,@{$recur{dayNames}}) ? 'checked="checked"' : '' ).q|/>
-            <label for="recurWeekDay_U">Sunday</label><br/>
-            <input type="checkbox" name="recurWeekDay" value="m" id="recurWeekDay_M" |.(grep(/m/,@{$recur{dayNames}}) ? 'checked="checked"' : '' ).q|/>
-            <label for="recurWeekDay_M">Monday</label><br/>
-            <input type="checkbox" name="recurWeekDay" value="t" id="recurWeekDay_T" |.(grep(/t/,@{$recur{dayNames}}) ? 'checked="checked"' : '' ).q|/>
-            <label for="recurWeekDay_T">Tuesday</label><br/>
-            <input type="checkbox" name="recurWeekDay" value="w" id="recurWeekDay_W" |.(grep(/w/,@{$recur{dayNames}}) ? 'checked="checked"' : '' ).q|/>
-            <label for="recurWeekDay_W">Wednesday</label><br/>
-            <input type="checkbox" name="recurWeekDay" value="r" id="recurWeekDay_R" |.(grep(/r/,@{$recur{dayNames}}) ? 'checked="checked"' : '' ).q|/>
-            <label for="recurWeekDay_R">Thursday</label><br/>
-            <input type="checkbox" name="recurWeekDay" value="f" id="recurWeekDay_F" |.(grep(/f/,@{$recur{dayNames}}) ? 'checked="checked"' : '' ).q|/>
-            <label for="recurWeekDay_F">Friday</label><br/>
-            <input type="checkbox" name="recurWeekDay" value="s" id="recurWeekDay_S" |.(grep(/s/,@{$recur{dayNames}}) ? 'checked="checked"' : '' ).q|/>
-            <label for="recurWeekDay_S">Saturday</label><br/>
+            |. sprintf($i18n->get('Every N weeks on'), q|<input type="text" name="recurWeek" size="3" value="|.$recur->{every}.q|" />|). q|<br/>
+            <input type="checkbox" name="recurWeekDay" value="u" id="recurWeekDay_U" |.(grep(/u/,@{$recur->{dayNames}}) ? 'checked="checked"' : '' ).q|/>
+            <label for="recurWeekDay_U">|. $i18n->get('sunday', 'DateTime'). q|</label><br/>
+            <input type="checkbox" name="recurWeekDay" value="m" id="recurWeekDay_M" |.(grep(/m/,@{$recur->{dayNames}}) ? 'checked="checked"' : '' ).q|/>
+            <label for="recurWeekDay_M">|. $i18n->get('monday', 'DateTime'). q|</label><br/>
+            <input type="checkbox" name="recurWeekDay" value="t" id="recurWeekDay_T" |.(grep(/t/,@{$recur->{dayNames}}) ? 'checked="checked"' : '' ).q|/>
+            <label for="recurWeekDay_T">|. $i18n->get('tuesday', 'DateTime'). q|</label><br/>
+            <input type="checkbox" name="recurWeekDay" value="w" id="recurWeekDay_W" |.(grep(/w/,@{$recur->{dayNames}}) ? 'checked="checked"' : '' ).q|/>
+            <label for="recurWeekDay_W">|. $i18n->get('wednesday', 'DateTime'). q|</label><br/>
+            <input type="checkbox" name="recurWeekDay" value="r" id="recurWeekDay_R" |.(grep(/r/,@{$recur->{dayNames}}) ? 'checked="checked"' : '' ).q|/>
+            <label for="recurWeekDay_R">|. $i18n->get('thursday', 'DateTime'). q|</label><br/>
+            <input type="checkbox" name="recurWeekDay" value="f" id="recurWeekDay_F" |.(grep(/f/,@{$recur->{dayNames}}) ? 'checked="checked"' : '' ).q|/>
+            <label for="recurWeekDay_F">|. $i18n->get('friday', 'DateTime'). q|</label><br/>
+            <input type="checkbox" name="recurWeekDay" value="s" id="recurWeekDay_S" |.(grep(/s/,@{$recur->{dayNames}}) ? 'checked="checked"' : '' ).q|/>
+            <label for="recurWeekDay_S">|. $i18n->get('saturday', 'DateTime'). q|</label><br/>
         </div>
 
-
-        <p><input type="radio" name="recurType" id="recurType_monthly" value="monthly" onclick="toggleRecur()" |.($recur{recurType} =~ /^month/ ? q|checked="checked"| : q||).q|/>
-        <label for="recurType_monthly">Monthly</label></p>
+        <p><input type="radio" name="recurType" id="recurType_monthly" value="monthly" onclick="toggleRecur()" |.($recur->{recurType} =~ /^month/ ? q|checked="checked"| : q||).q|/>
+        <label for="recurType_monthly">|. $i18n->get('Monthly'). q|</label></p>
         <div style="margin-left: 4em;" id="recurPattern_monthly">
-            <p>Every <input type="text" name="recurMonth" size="3" value="|.$recur{every}.q|" /> month(s) on</p>
-            <p><input type="radio" name="recurSubType" id="recurSubType_monthDay" value="monthDay" |.($recur{recurType} eq "monthDay" ? q|checked="checked"| : q||).q|/>
-            <label for="recurSubType_monthDay">day </label>
-            <input type="text" name="recurMonthDay" size="3" value="|.$recur{dayNumber}.q|"></p>
+            <p>|. sprintf($i18n->get('Every N months on'), q|<input type="text" name="recurMonth" size="3" value="|.$recur->{every}.q|" />|). q|</p>
+            <p><input type="radio" name="recurSubType" id="recurSubType_monthDay" value="monthDay" |.($recur->{recurType} eq "monthDay" ? q|checked="checked"| : q||).q|/>
+            <label for="recurSubType_monthDay">|. $i18n->get('day'). q| </label>
+            <input type="text" name="recurMonthDay" size="3" value="|.$recur->{dayNumber}.q|"></p>
 
             <p>
-            <input style="vertical-align: top;" type="radio" name="recurSubType" id="recurSubType_monthWeek" value="monthWeek" |.($recur{recurType} eq "monthWeek" ? q|checked="checked"| : q||).q|/>
+            <input style="vertical-align: top;" type="radio" name="recurSubType" id="recurSubType_monthWeek" value="monthWeek" |.($recur->{recurType} eq "monthWeek" ? q|checked="checked"| : q||).q|/>
             <select style="vertical-align: top;" name="recurMonthWeekNumber">
-                <option |.(grep(/first/, @{$recur{weeks}}) ? 'selected="selected"' : '').q|>first</option>
-                <option |.(grep(/second/, @{$recur{weeks}}) ? 'selected="selected"' : '').q|>second</option>
-                <option |.(grep(/third/, @{$recur{weeks}}) ? 'selected="selected"' : '').q|>third</option>
-                <option |.(grep(/fourth/, @{$recur{weeks}}) ? 'selected="selected"' : '').q|>fourth</option>
-                <option |.(grep(/fifth/, @{$recur{weeks}}) ? 'selected="selected"' : '').q|>last</option>
-            </select> week on
+                <option value="first"  |.(grep(/first/,  @{$recur->{weeks}}) ? 'selected="selected"' : '').q|>|. $i18n->get('first').  q|</option>
+                <option value="second" |.(grep(/second/, @{$recur->{weeks}}) ? 'selected="selected"' : '').q|>|. $i18n->get('second'). q|</option>
+                <option value="third"  |.(grep(/third/,  @{$recur->{weeks}}) ? 'selected="selected"' : '').q|>|. $i18n->get('third').  q|</option>
+                <option value="fourth" |.(grep(/fourth/, @{$recur->{weeks}}) ? 'selected="selected"' : '').q|>|. $i18n->get('fourth'). q|</option>
+                <option value="fifth"  |.(grep(/fifth/,  @{$recur->{weeks}}) ? 'selected="selected"' : '').q|>|. $i18n->get('last').   q|</option>
+            </select> |. $i18n->get('week on'). q|
             <select style="vertical-align: top;" name="recurMonthWeekDay">
-                <option value="u" |.(grep(/u/,@{$recur{dayNames}}) ? 'selected="selected"' : '' ).q|>Sunday</option>
-                <option value="m" |.(grep(/m/,@{$recur{dayNames}}) ? 'selected="selected"' : '' ).q|>Monday</option>
-                <option value="t" |.(grep(/t/,@{$recur{dayNames}}) ? 'selected="selected"' : '' ).q|>Tuesday</option>
-                <option value="w" |.(grep(/w/,@{$recur{dayNames}}) ? 'selected="selected"' : '' ).q|>Wednesday</option>
-                <option value="r" |.(grep(/r/,@{$recur{dayNames}}) ? 'selected="selected"' : '' ).q|>Thursday</option>
-                <option value="f" |.(grep(/f/,@{$recur{dayNames}}) ? 'selected="selected"' : '' ).q|>Friday</option>
-                <option value="s" |.(grep(/s/,@{$recur{dayNames}}) ? 'selected="selected"' : '' ).q|>Saturday</option>
+                <option value="u" |.(grep(/u/,@{$recur->{dayNames}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('sunday', 'DateTime'). q|</option>
+                <option value="m" |.(grep(/m/,@{$recur->{dayNames}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('monday', 'DateTime').    q|</option>
+                <option value="t" |.(grep(/t/,@{$recur->{dayNames}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('tuesday', 'DateTime').   q|</option>
+                <option value="w" |.(grep(/w/,@{$recur->{dayNames}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('wednesday', 'DateTime'). q|</option>
+                <option value="r" |.(grep(/r/,@{$recur->{dayNames}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('thursday', 'DateTime').  q|</option>
+                <option value="f" |.(grep(/f/,@{$recur->{dayNames}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('friday', 'DateTime').    q|</option>
+                <option value="s" |.(grep(/s/,@{$recur->{dayNames}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('saturday', 'DateTime').  q|</option>
             </select>
             </p>
         </div>
 
 
-        <p><input type="radio" name="recurType" id="recurType_yearly" value="yearly" onclick="toggleRecur()" |.($recur{recurType} =~ /^year/ ? q|checked="checked"| : q||).q|/>
-        <label for="recurType_yearly">Yearly</label></p>
+        <p><input type="radio" name="recurType" id="recurType_yearly" value="yearly" onclick="toggleRecur()" |.($recur->{recurType} =~ /^year/ ? q|checked="checked"| : q||).q|/>
+        <label for="recurType_yearly">|. $i18n->get('Yearly'). q|</label></p>
         <div style="margin-left: 4em;" id="recurPattern_yearly">
-            <p>Every <input type="text" name="recurYear" size="3" value="|.$recur{every}.q|" /> years(s) on</p>
+            <p>|. sprintf($i18n->get('Every N years on'),q|<input type="text" name="recurYear" size="3" value="|.$recur->{every}.q|" />|). q|</p>
             <p>
-            <input type="radio" name="recurSubType" id="recurSubType_yearDay" value="yearDay" |.($recur{recurType} eq "yearDay" ? q|checked="checked"| : q||).q|/>
+            <input type="radio" name="recurSubType" id="recurSubType_yearDay" value="yearDay" |.($recur->{recurType} eq "yearDay" ? q|checked="checked"| : q||).q|/>
             <select name="recurYearDayMonth">
-                <option value="jan" |.(grep(/jan/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>January</option>
-                <option value="feb" |.(grep(/feb/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>February</option>
-                <option value="mar" |.(grep(/mar/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>March</option>
-                <option value="apr" |.(grep(/apr/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>April</option>
-                <option value="may" |.(grep(/may/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>May</option>
-                <option value="jun" |.(grep(/jun/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>June</option>
-                <option value="jul" |.(grep(/jul/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>July</option>
-                <option value="aug" |.(grep(/aug/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>August</option>
-                <option value="sep" |.(grep(/sep/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>September</option>
-                <option value="oct" |.(grep(/oct/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>October</option>
-                <option value="nov" |.(grep(/nov/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>November</option>
-                <option value="dec" |.(grep(/dec/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>December</option>
+                <option value="jan" |.(grep(/jan/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('january','DateTime').   q|</option>
+                <option value="feb" |.(grep(/feb/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('february','DateTime').  q|</option>
+                <option value="mar" |.(grep(/mar/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('march','DateTime').     q|</option>
+                <option value="apr" |.(grep(/apr/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('april','DateTime').     q|</option>
+                <option value="may" |.(grep(/may/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('may','DateTime').       q|</option>
+                <option value="jun" |.(grep(/jun/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('june','DateTime').      q|</option>
+                <option value="jul" |.(grep(/jul/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('july','DateTime').      q|</option>
+                <option value="aug" |.(grep(/aug/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('august','DateTime').    q|</option>
+                <option value="sep" |.(grep(/sep/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('september','DateTime'). q|</option>
+                <option value="oct" |.(grep(/oct/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('october','DateTime').   q|</option>
+                <option value="nov" |.(grep(/nov/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('november','DateTime').  q|</option>
+                <option value="dec" |.(grep(/dec/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('december','DateTime').  q|</option>
             </select>
-            <input type="text" name="recurYearDay" size="3" value="|.$recur{dayNumber}.q|"/>
+            <input type="text" name="recurYearDay" size="3" value="|.$recur->{dayNumber}.q|"/>
             </p>
 
             <p>
-            <input style="vertical-align: top;" type="radio" name="recurSubType" id="recurSubType_yearWeek" value="yearWeek" |.($recur{recurType} eq "yearWeek" ? q|checked="checked"| : q||).q|/>
+            <input style="vertical-align: top;" type="radio" name="recurSubType" id="recurSubType_yearWeek" value="yearWeek" |.($recur->{recurType} eq "yearWeek" ? q|checked="checked"| : q||).q|/>
             <select style="vertical-align: top;" name="recurYearWeekNumber">
-                <option |.(grep(/first/, @{$recur{weeks}}) ? 'selected="selected"' : '').q|>first</option>
-                <option |.(grep(/second/, @{$recur{weeks}}) ? 'selected="selected"' : '').q|>second</option>
-                <option |.(grep(/third/, @{$recur{weeks}}) ? 'selected="selected"' : '').q|>third</option>
-                <option |.(grep(/fourth/, @{$recur{weeks}}) ? 'selected="selected"' : '').q|>fourth</option>
-                <option |.(grep(/fifth/, @{$recur{weeks}}) ? 'selected="selected"' : '').q|>last</option>
-            </select> 
+                <option value="first"  |.(grep(/first/,  @{$recur->{weeks}}) ? 'selected="selected"' : '').q|>|. $i18n->get('first').  q|</option>
+                <option value="second" |.(grep(/second/, @{$recur->{weeks}}) ? 'selected="selected"' : '').q|>|. $i18n->get('second'). q|</option>
+                <option value="third"  |.(grep(/third/,  @{$recur->{weeks}}) ? 'selected="selected"' : '').q|>|. $i18n->get('third').  q|</option>
+                <option value="fourth" |.(grep(/fourth/, @{$recur->{weeks}}) ? 'selected="selected"' : '').q|>|. $i18n->get('fourth'). q|</option>
+                <option value="fifth"  |.(grep(/fifth/,  @{$recur->{weeks}}) ? 'selected="selected"' : '').q|>|. $i18n->get('last').   q|</option>
+            </select>
             <select style="vertical-align: top;" name="recurYearWeekDay">
-                <option value="u" |.(grep(/u/,@{$recur{dayNames}}) ? 'selected="selected"' : '' ).q|>Sunday</option>
-                <option value="m" |.(grep(/m/,@{$recur{dayNames}}) ? 'selected="selected"' : '' ).q|>Monday</option>
-                <option value="t" |.(grep(/t/,@{$recur{dayNames}}) ? 'selected="selected"' : '' ).q|>Tuesday</option>
-                <option value="w" |.(grep(/w/,@{$recur{dayNames}}) ? 'selected="selected"' : '' ).q|>Wednesday</option>
-                <option value="r" |.(grep(/r/,@{$recur{dayNames}}) ? 'selected="selected"' : '' ).q|>Thursday</option>
-                <option value="f" |.(grep(/f/,@{$recur{dayNames}}) ? 'selected="selected"' : '' ).q|>Friday</option>
-                <option value="s" |.(grep(/s/,@{$recur{dayNames}}) ? 'selected="selected"' : '' ).q|>Saturday</option>
-            </select> of 
+                <option value="u" |.(grep(/u/,@{$recur->{dayNames}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('sunday', 'DateTime'). q|</option>
+                <option value="m" |.(grep(/m/,@{$recur->{dayNames}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('monday', 'DateTime').    q|</option>
+                <option value="t" |.(grep(/t/,@{$recur->{dayNames}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('tuesday', 'DateTime').   q|</option>
+                <option value="w" |.(grep(/w/,@{$recur->{dayNames}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('wednesday', 'DateTime'). q|</option>
+                <option value="r" |.(grep(/r/,@{$recur->{dayNames}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('thursday', 'DateTime').  q|</option>
+                <option value="f" |.(grep(/f/,@{$recur->{dayNames}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('friday', 'DateTime').    q|</option>
+                <option value="s" |.(grep(/s/,@{$recur->{dayNames}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('saturday', 'DateTime').  q|</option>
+            </select> |. $i18n->get('of'). q|
             <select name="recurYearWeekMonth">
-                <option value="jan" |.(grep(/jan/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>January</option>
-                <option value="feb" |.(grep(/feb/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>February</option>
-                <option value="mar" |.(grep(/mar/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>March</option>
-                <option value="apr" |.(grep(/apr/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>April</option>
-                <option value="may" |.(grep(/may/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>May</option>
-                <option value="jun" |.(grep(/jun/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>June</option>
-                <option value="jul" |.(grep(/jul/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>July</option>
-                <option value="aug" |.(grep(/aug/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>August</option>
-                <option value="sep" |.(grep(/sep/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>September</option>
-                <option value="oct" |.(grep(/oct/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>October</option>
-                <option value="nov" |.(grep(/nov/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>November</option>
-                <option value="dec" |.(grep(/dec/,@{$recur{months}}) ? 'selected="selected"' : '' ).q|>December</option>
+                <option value="jan" |.(grep(/jan/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('january','DateTime').   q|</option>
+                <option value="feb" |.(grep(/feb/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('february','DateTime').  q|</option>
+                <option value="mar" |.(grep(/mar/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('march','DateTime').     q|</option>
+                <option value="apr" |.(grep(/apr/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('april','DateTime').     q|</option>
+                <option value="may" |.(grep(/may/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('may','DateTime').       q|</option>
+                <option value="jun" |.(grep(/jun/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('june','DateTime').      q|</option>
+                <option value="jul" |.(grep(/jul/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('july','DateTime').      q|</option>
+                <option value="aug" |.(grep(/aug/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('august','DateTime').    q|</option>
+                <option value="sep" |.(grep(/sep/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('september','DateTime'). q|</option>
+                <option value="oct" |.(grep(/oct/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('october','DateTime').   q|</option>
+                <option value="nov" |.(grep(/nov/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('november','DateTime').  q|</option>
+                <option value="dec" |.(grep(/dec/,@{$recur->{months}}) ? 'selected="selected"' : '' ).q|>|. $i18n->get('december','DateTime').  q|</option>
             </select>
             </p>
         </div>
@@ -2385,29 +2312,33 @@ sub www_edit {
 
 
     # Start
-    $var->{"formRecurStart"} 
+    $var->{"formRecurStart"}
         = WebGUI::Form::date($session, {
             name            => "recurStart",
-            value           => $recur{startDate},
+            value           => $recur->{startDate},
             defaultValue    => $self->get("startDate"),
         });
 
     # End
-    $var->{"formRecurEnd"} 
+    $var->{"formRecurEnd"}
         = q|
-        <div><input type="radio" name="recurEndType" id="recurEndType_none" value="none" |.(!$recur{endDate} && !$recur{endAfter} ? 'checked="checked"' : '').q|/>
-        <label for="recurEndType_none">No end</label><br />
+        <div><input type="radio" name="recurEndType" id="recurEndType_none" value="none" |.(!$recur->{endDate} && !$recur->{endAfter} ? 'checked="checked"' : '').q| onclick="toggleRecurEnd()"/>
+        <label for="recurEndType_none">|. $i18n->get('No end'). q|</label>
 
-        <input type="radio" name="recurEndType" id="recurEndType_date" value="date" |.($recur{endDate} ? 'checked="checked"' : '' ).q| />
-        <label for="recurEndType_date">By date </label>|
-        . WebGUI::Form::date($session,{ name => "recurEndDate", value => $recur{endDate}, defaultValue => $recur{endDate} })
+        <input type="radio" name="recurEndType" id="recurEndType_date" value="date" |.($recur->{endDate} ? 'checked="checked"' : '' ).q| onclick="toggleRecurEnd()"/>
+        <label for="recurEndType_date">|. $i18n->get('By date'). q| </label>
+        <div id="recurEndPattern_date"> |
+        . WebGUI::Form::date($session,{ name => "recurEndDate", value => $recur->{endDate}, defaultValue => $recur->{endDate} })
         . q|
         <br />
+        </div>
 
-        <input type="radio" name="recurEndType" id="recurEndType_after" value="after" |.($recur{endAfter} ? 'checked="checked"' : '' ).q| />
-        <label for="recurEndType_after">After </label>
-        <input type="text" size="3" name="recurEndAfter" value="|.$recur{endAfter}.q|" /> 
-        occurences.
+        <input type="radio" name="recurEndType" id="recurEndType_after" value="after" |.($recur->{endAfter} ? 'checked="checked"' : '' ).q| onclick="toggleRecurEnd()"/>
+        <label for="recurEndType_after">|. $i18n->get('After'). q| </label>
+        <div id="recurEndPattern_after">
+        <input type="text" size="3" name="recurEndAfter" value="|.$recur->{endAfter}.q|" />
+        |. $i18n->get('occurences'). q|.
+        </div>
         </div>
     |;
 
@@ -2423,14 +2354,14 @@ sub www_edit {
     $var->{"formSave"}
         = WebGUI::Form::submit($session, {
             name    => "save",
-            value   => "save",
+            value   => $i18n->get('62', 'WebGUI'),
         });
 
     # Cancel button
     $var->{"formCancel"}
         = WebGUI::Form::button($session, {
             name    => "cancel",
-            value   => "cancel",
+            value   => $i18n->get('cancel', 'WebGUI'),
             extras  => 'onClick="window.history.go(-1)"',
         });
 
@@ -2470,7 +2401,19 @@ sub www_edit {
                 document.getElementById("recurPattern_yearly").style.display = "block";
             }
         }
-        YAHOO.util.Event.onAvailable("recurPattern",function(e) { toggleRecur(); });
+
+        function toggleRecurEnd() {
+            document.getElementById("recurEndPattern_date").style.display = "none";
+            document.getElementById("recurEndPattern_after").style.display = "none";
+
+            if (document.getElementById("recurEndType_date").checked) {
+                document.getElementById("recurEndPattern_date").style.display = "block";
+            }
+            else if (document.getElementById("recurEndType_after").checked) {
+                document.getElementById("recurEndPattern_after").style.display = "block";
+            }
+        }
+        YAHOO.util.Event.onAvailable("recurPattern",function(e) { toggleRecur(); toggleRecurEnd(); });
         </script>
 ENDJS
 
@@ -2489,11 +2432,11 @@ ENDJS
     my $parent        = $self->getParent;
     my $template;
     if ($parent) {
-        $template 
+        $template
             = WebGUI::Asset::Template->new($session,$parent->get("templateIdEventEdit"));
     }
     else {
-        $template 
+        $template
             = WebGUI::Asset::Template->new($session,"CalendarEventEdit00001");
     }
 
@@ -2536,10 +2479,11 @@ sub www_view {
     return $self->session->privilege->noAccess() unless $self->canView;
     my $check = $self->checkView;
     return $check if (defined $check);
-    $self->session->http->setCacheControl($self->get("visitorCacheTimeout")) if ($self->session->user->isVisitor);
-    $self->session->http->sendHeader;    
+    my $calendar = $self->getParent;
+    $self->session->http->setCacheControl($calendar->get("visitorCacheTimeout")) if ($self->session->user->isVisitor);
+    $self->session->http->sendHeader;
     $self->prepareView;
-    my $style = $self->getParent->processStyle($self->getSeparator);
+    my $style = $calendar->processStyle($self->getSeparator);
     my ($head, $foot) = split($self->getSeparator,$style);
     $self->session->output->print($head,1);
     $self->session->output->print($self->view);
@@ -2554,19 +2498,19 @@ sub www_view {
 
 Pages for Next Occurence >> and Prev Occurrence << on the Event Details page
 
-Shared package global to set how many user defined fields there are. 
+Shared package global to set how many user defined fields there are.
 
 Fix the Recurrence form. Use WebGUI::Form elements and combine them to create
-the form.recurPattern field. If users want to create their own way to make the 
+the form.recurPattern field. If users want to create their own way to make the
 pattern, let them.
 
 Fix the Recurrence storage. Add DateTime::Event::ICal and dependencies to WebGUI
-and use ICal recurrence rules. Why did I not do this before? 
+and use ICal recurrence rules. Why did I not do this before?
 
 When sending ICalendar feeds, send the Recurrence Rule. Currently I'm not going
 to be able to do that.
 
-Recurring events should be created by the commit process, so that it's done 
+Recurring events should be created by the commit process, so that it's done
 asynchronously with Spectre rather than making the browser wait for a long time
 (to make many many events).
 

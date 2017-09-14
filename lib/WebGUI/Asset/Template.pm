@@ -21,10 +21,12 @@ use WebGUI::Asset::Template::HTMLTemplate;
 use WebGUI::Utility;
 use WebGUI::Form;
 use WebGUI::Exception;
+use List::MoreUtils qw{ any };
 use Tie::IxHash;
 use Clone qw/clone/;
 use HTML::Packer;
-use JSON qw{ to_json };
+use JSON qw{ to_json from_json };
+use Try::Tiny;
 
 =head1 NAME
 
@@ -44,6 +46,52 @@ use WebGUI::Asset::Template;
 These methods are available from this class:
 
 =cut
+
+#-------------------------------------------------------------------
+
+=head2 addAttachments ( new_attachments )
+
+Adds attachments to this template.  New attachments are added to the end of the current set of
+attachments.
+
+=head3 new_attachments
+
+An arrayref of hashrefs, where each hashref should have at least url and type.  All
+other keys will be ignored.
+
+=cut
+
+sub addAttachments {
+    my ($self, $new_attachments) = @_;
+    my $attachments = $self->getAttachments();
+
+    foreach my $a (@{ $new_attachments }) {
+        push @{ $attachments }, {
+            url  => $a->{url},
+            type => $a->{type},
+        };
+    }
+    my $json = JSON->new->encode( $attachments );
+    $self->update({ attachmentsJson => $json, });
+}
+
+#-------------------------------------------------------------------
+
+=head2 cut ( )
+
+Extend the base method to handle cutting the User Function Style template and destroying your site.
+If the current template is the User Function Style template with the Fail Safe template.
+
+=cut
+
+sub cut {
+    my ( $self )    = @_;
+    my $returnValue = $self->SUPER::cut();
+    if ($returnValue && $self->getId eq $self->session->setting->get('userFunctionStyleId')) {
+        $self->session->setting->set('userFunctionStyleId', 'PBtmpl0000000000000060');
+    }
+    return $returnValue;
+}
 
 #-------------------------------------------------------------------
 
@@ -92,9 +140,8 @@ sub definition {
                 defaultValue    => 1,
             },
             parser => {
-                noFormPost      => 1,
-                fieldType       => 'selectBox',
-                defaultValue    => [$session->config->get("defaultTemplateParser")],
+                fieldType    => 'templateParser',
+                defaultValue => $session->config->get('defaultTemplateParser'),
             },	
             namespace => {
                 fieldType       => 'combo',
@@ -109,40 +156,15 @@ sub definition {
                 fieldType       => 'yesNo',
                 defaultValue    => 0,
             },
+            storageIdExample => {
+                fieldType       => 'image',
+            },
+            attachmentsJson => {
+                fieldType       => 'JsonTable',
+            },
         },
     };
     return $class->SUPER::definition($session,$definition);
-}
-
-#-------------------------------------------------------------------
-
-=head2 addAttachments ( attachments )
-
-Adds attachments to this template.  Attachments is an arrayref of hashrefs,
-where each hashref should have at least url, type, and sequence as keys.
-
-=cut
-
-sub addAttachments {
-    my ($self, $attachments) = @_;
-
-    my $db = $self->session->db;
-
-    my $sql = q{
-        INSERT INTO template_attachments
-            (templateId, revisionDate, url, type, sequence)
-        VALUES
-            (?,          ?,            ?,   ?,    ?)
-    };
-
-    foreach my $a (@$attachments) {
-        my @params = (
-            $self->getId, 
-            $self->get('revisionDate'),
-            @{$a}{qw(url type sequence)}
-        );
-        $db->write($sql, \@params);
-    }
 }
 
 #-------------------------------------------------------------------
@@ -157,7 +179,6 @@ sub addRevision {
     my ( $self, $properties, @args ) = @_;
     my $asset = $self->SUPER::addRevision($properties, @args);
     delete $properties->{templatePacked};
-    $asset->addAttachments($self->getAttachments);
     return $asset;
 }
 
@@ -191,8 +212,12 @@ copy.
 
 sub duplicate {
 	my $self = shift;
-	my $newTemplate = $self->SUPER::duplicate;
+	my $newTemplate = $self->SUPER::duplicate(@_);
     $newTemplate->update({isDefault => 0});
+    if ( my $storageId = $self->get('storageIdExample') ) {
+        my $newStorage  = WebGUI::Storage->get( $self->session, $storageId )->copy;
+        $newTemplate->update({ storageIdExample => $newStorage->getId });
+    }
     return $newTemplate;
 }
 
@@ -207,7 +232,9 @@ Override to add attachments to package data
 sub exportAssetData {
     my ( $self ) = @_;
     my $data    = $self->SUPER::exportAssetData;
-    $data->{template_attachments} = $self->getAttachments;
+    if ( $self->get('storageIdExample') ) {
+        push @{$data->{storage}}, $self->get('storageIdExample');
+    }
     return $data;
 }
 
@@ -227,27 +254,24 @@ If defined, will limit the attachments to this type; e.g., passing
 
 sub getAttachments {
 	my ( $self, $type ) = @_;
-	my @params = ($self->getId, $self->get('revisionDate'));
-	my $typeString;
 
-	if ($type) {
-		$typeString = 'AND type = ?';
-		push(@params, $type);
-	}
+    return [] if !$self->get('attachmentsJson');
 
-	my $sql = qq{
-		SELECT 
-			* 
-		FROM 
-			template_attachments 
-		WHERE 
-			templateId = ?
-            AND revisionDate = ?
-			$typeString
-		ORDER BY
-			type, sequence ASC
-	};
-	return $self->session->db->buildArrayRefOfHashRefs($sql, \@params);
+    my $attachments = JSON->new->decode( $self->get('attachmentsJson') );
+
+    # We want it all and we want it now
+    if ( !$type ) {
+        return $attachments;
+    }
+
+    my $output  = [];
+    for my $attach ( @{$attachments} ) {
+        if ( $attach->{type} eq $type ) {
+            push @{$output}, $attach;
+        }
+    }
+
+    return $output;
 }
 
 #-------------------------------------------------------------------
@@ -260,136 +284,182 @@ Returns the TabForm object that will be used in generating the edit page for thi
 
 sub getEditForm {
 	my $self = shift;
+	my $session = $self->session;
+
+	my ( $db, $url, $style, $form, $config )
+	    = $session->quick(qw( db url style form config ));
+
 	my $tabform = $self->SUPER::getEditForm();
-	my $i18n = WebGUI::International->new($self->session, 'Asset_Template');
+	my $i18n = WebGUI::International->new($session, 'Asset_Template');
+
+	my ( $properties, $meta, $display ) =
+	    map { $tabform->getTab($_) } qw( properties meta display );
+
+	my $returnUrl = $form->get('returnUrl');
 	$tabform->hidden({
 		name=>"returnUrl",
-		value=>$self->session->form->get("returnUrl")
+		value=>$returnUrl,
 		});
 	if ($self->getValue("namespace") eq "") {
-		my $namespaces = $self->session->dbSlave->buildHashRef("select distinct(namespace) from template order by namespace");
-		$tabform->getTab("properties")->combo(
+		my $namespaces = $db->buildHashRef("select distinct(namespace) from template order by namespace");
+		$properties->combo(
 			-name=>"namespace",
 			-options=>$namespaces,
 			-label=>$i18n->get('namespace'),
 			-hoverHelp=>$i18n->get('namespace description'),
-			-value=>[$self->session->form->get("namespace")] 
+			-value=>[$form->get("namespace")]
 			);
 	} else {
-		$tabform->getTab("meta")->readOnly(
+		$meta->readOnly(
 			-label=>$i18n->get('namespace'),
 			-hoverHelp=>$i18n->get('namespace description'),
 			-value=>$self->getValue("namespace")
-			);	
-		$tabform->getTab("meta")->hidden(
+			);
+		$meta->hidden(
 			-name=>"namespace",
 			-value=>$self->getValue("namespace")
 			);
 	}
-	$tabform->getTab("display")->yesNo(
+	$display->yesNo(
 		-name=>"showInForms",
 		-value=>$self->getValue("showInForms"),
 		-label=>$i18n->get('show in forms'),
 		-hoverHelp=>$i18n->get('show in forms description'),
 		);
-	$tabform->getTab("properties")->codearea(
+	$properties->codearea(
 		-name=>"template",
 		-label=>$i18n->get('assetName'),
 		-hoverHelp=>$i18n->get('template description'),
 		-syntax => "html",
 		-value=>$self->getValue("template")
 		);
-    $tabform->getTab('properties')->yesNo(
-        name        => "usePacked",
-        label       => $i18n->get('usePacked label'),
-        hoverHelp   => $i18n->get('usePacked description'),
-        value       => $self->getValue("usePacked"),
-    );
-	if($self->session->config->get("templateParsers")){
-		my @temparray = @{$self->session->config->get("templateParsers")};
-		tie my %parsers, 'Tie::IxHash';
-		while(my $a = shift @temparray){
-			$parsers{$a} = $self->getParser($self->session, $a)->getName();
-		}
-		my $value = [$self->getValue("parser")];
-		$value = \[$self->session->config->get("defaultTemplateParser")] if(!$self->getValue("parser"));
-		$tabform->getTab("properties")->selectBox(
-			-name=>"parser",
-			-options=>\%parsers,
-			-value=>$value,
-			-label=>$i18n->get('parser'),
-			-hoverHelp=>$i18n->get('parser description'),
-			);
-	}
-
-    ### Template attachments
-	my $session = $self->session;
-	my @headers = map { '<th>' . $i18n->get("attachment header $_") . '</th>' } 
-                      qw(index type url remove);
-
-    tie my %attachmentTypeNames, 'Tie::IxHash' => (
-        stylesheet => $i18n->get('css label'),
-        headScript => $i18n->get('js head label'),
-        bodyScript => $i18n->get('js body label'),
-    );
-
-	my $table = '<table id="attachmentDisplay">';
-	$table .= "<thead><tr>@headers</tr></thead><tbody id='addAnchor'>";
-	foreach my $a ( @{ $self->getAttachments } ) {
-		my ($seq, $type, $url) = @{$a}{qw(sequence type url)};
-        # escape macros in the url so they don't get processed
-        $url =~ s/\^/&#94;/g;
-		my $del = WebGUI::Form::checkbox(
-			$session, { 
-				name   => 'removeAttachment',
-				value  => $url,
-				extras => 'class="id"',
-            }
-        );
-		my @data = (
-			"<td class='index'>$seq</td>", 
-			"<td class='type'>$type</td>", 
-			"<td class='url'>$url</td>", 
-			"<td>$del</td>",
-		);
-		$table .= "<tr class='existingAttachment'>@data</tr>";
-	}
-	$table .= '</tbody></table>';
-	my $properties = $tabform->getTab('properties');
-	my $label = $i18n->get('attachment display label');
-	$properties->raw("<tr><td>$label</td><td>$table</td></tr>");
-
-	my @data = map { "<td>$_</td>" } (
-		WebGUI::Form::integer(
-			$session, { size => '2', id => 'addBoxIndex' }
-		),
-		WebGUI::Form::selectBox(
-			$session, { options => \%attachmentTypeNames, id => 'addBoxType' }
-		),
-		WebGUI::Form::text($session, { id => 'addBoxUrl', size => 40 }),
-		WebGUI::Form::button(
-			$session, { 
-				value  => $i18n->get('attachment add button'), 
-				extras => 'onclick="addClick()"' 
-			}
-		),
+	$properties->raw(qq(
+	    <tr>
+	        <td class='formDescription' valign='top'>
+	            ${\ $i18n->get('Preview') }
+	        </td>
+	        <td class='tableData'>
+	            <input type='button'
+	                   value='${\ $i18n->get('Preview') }'
+	                   id='preview'/>
+	            <input type='button'
+	                   value='${\ $i18n->get('Configure') }'
+	                   id='previewConfig'/>
+	        </td>
+	    </tr>
+	));
+	my $cform = WebGUI::HTMLForm->new($session);
+	$cform->yesNo(
+	    id        => 'previewRaw',
+	    name      => 'previewRaw',
+	    label     => $i18n->get('Plain Text?'),
+	    hoverHelp => $i18n->get('Plain Text hoverHelp'),
+	);
+	$cform->text(
+	    id           => 'previewFetchUrl',
+	    label        => $i18n->get('URL'),
+	    hoverHelp    => $i18n->get('URL hoverHelp'),
+	    defaultValue => $returnUrl,
+	);
+	$cform->button(
+	    id        => 'previewFetch',
+	    label     => $i18n->get('Fetch Variables'),
+	    hoverHelp => $i18n->get('Fetch Variables hoverHelp'),
+	    value     => $i18n->get('Fetch'),
+	);
+	$cform->codearea(
+	    id        => 'previewVars',
+	    label     => $i18n->get('Variables'),
+	    hoverHelp => $i18n->get('Variables hoverHelp'),
 	);
 
-	my ($style, $url) = $self->session->quick(qw(style url));
-	$style->setScript($url->extras('yui/build/yahoo/yahoo-min.js'), {type => 'text/javascript'});
-	$style->setScript($url->extras('yui/build/json/json-min.js'),   {type => 'text/javascript'});
-	$style->setScript($url->extras('yui/build/dom/dom-min.js'),     {type => 'text/javascript'});
+	$cform->hidden(id => 'previewId', value => $self->getId);
+	$cform->hidden(id => 'previewGateway', value => $url->gateway);
+	$properties->raw(qq(
+	    <tr>
+	    <td></td>
+	    <td>
+	        <div id='previewConfigForm'>
+	            <div class='hd'>${\ $i18n->get('Configure Preview') }</div>
+	            <table class='bd'>${\ $cform->printRowsOnly }</table>
+	            <div class='ft' style='margin:0 auto; text-align: center'>
+	                <button id='previewConfigClose'>Close</button>
+	            </div>
+	        </div>
+	    </td>
+	    </tr>
+	));
 
-	pop(@headers);
-	my $scriptUrl = $url->extras('templateAttachments.js');
-	$table = "<table id='addBox'><tr>@headers</tr><tr>@data</tr></table>";
-	$table .= qq(<script type="text/javascript" src="$scriptUrl"></script>);
-	$label = $i18n->get('attachment add field label');
-	$properties->raw("<tr><td>$label</td><td>$table</td></tr>");
+	$properties->yesNo(
+	    name        => "usePacked",
+	    label       => $i18n->get('usePacked label'),
+	    hoverHelp   => $i18n->get('usePacked description'),
+	    value       => $self->getValue("usePacked"),
+	);
+
+	$style->setScript($url->extras($_)) for qw(
+	    yui/build/json/json-min.js
+	    yui/build/container/container-min.js
+	    templatePreview.js
+	);
+
+	$properties->templateParser(
+		name      => 'parser',
+		label     => $i18n->get('parser'),
+		hoverHelp => $i18n->get('parser description'),
+		value     => $self->getValue('parser'),
+	);
+
+	$properties->jsonTable(
+	    name        => 'attachmentsJson',
+	    value       => $self->get('attachmentsJson'),
+	    label       => $i18n->get("attachment display label"),
+	    fields      => [
+	        {
+	            type            => "text",
+	            name            => "url",
+	            label           => $i18n->get('attachment header url'),
+	            size            => '48',
+	        },
+	        {
+	            type            => "select",
+	            name            => "type",
+	            label           => $i18n->get('attachment header type'),
+	            options         => [
+	                stylesheet => $i18n->get('css label'),
+	                headScript => $i18n->get('js head label'),
+	                bodyScript => $i18n->get('js body label'),
+	            ],
+	        },
+	    ],
+	);
+
+	$properties->image(
+	    name        => 'storageIdExample',
+	    value       => $self->getValue('storageIdExample'),
+	    label       => $i18n->get('field storageIdExample'),
+	    hoverHelp   => $i18n->get('field storageIdExample description'),
+	);
 
 	return $tabform;
 }
 
+#-------------------------------------------------------------------
+
+=head2 getExampleImageUrl ( )
+
+Get the URL to the example image of this template, if any
+
+=cut
+
+sub getExampleImageUrl {
+    my ( $self ) = @_;
+    if ( my $storageId = $self->get('storageIdExample') ) {
+        my $storage = WebGUI::Storage->get( $self->session, $storageId );
+        return $storage->getUrl( $storage->getFiles->[0] );
+    }
+    return;
+}
 
 #-------------------------------------------------------------------
 
@@ -457,30 +527,57 @@ A parser class to use. Defaults to "WebGUI::Asset::Template::HTMLTemplate"
 sub getParser {
     my $class = shift;
     my $session = shift;
-    my $parser = shift || $session->config->get("defaultTemplateParser") || "WebGUI::Asset::Template::HTMLTemplate";
+    my $parser = shift;
 
-    if ($parser eq "") {
-        return WebGUI::Asset::Template::HTMLTemplate->new($session);
-    } else {
-        eval("use $parser");
-        return $parser->new($session);
+    # If parser is not in the config, throw an error message
+    if ( $parser && $parser ne $session->config->get('defaultTemplateParser') 
+                && !any { $_ eq $parser } @{$session->config->get('templateParsers')} ) {
+        WebGUI::Error::NotInConfig->throw(
+            error       => "Attempted to load template parser '$parser' that is not in config file",
+            module      => $parser,
+            configKey   => 'templateParsers',
+        );
     }
+    else {
+        $parser ||= $session->config->get("defaultTemplateParser") || "WebGUI::Asset::Template::HTMLTemplate";
+    }
+
+    WebGUI::Pluggable::load( $parser );
+    return $parser->new($session);
+}
+
+#-------------------------------------------------------------------
+#
+# See the warning about using this on processVariableHeaders(). If no
+# variables were captured, we'll return the empty string.
+
+sub getVariableJson {
+    my ($class, $session) = @_;
+    my ($show, $vars, $json);
+
+    return ($show = $session->stow->get('showTemplateVars'))
+        && ($vars = $show->{vars})
+        && ($json = eval { JSON::encode_json($vars) })
+        && ($show->{startDelimiter} . $json . $show->{endDelimiter})
+        or '';
 }
 
 #-------------------------------------------------------------------
 
 =head2 importAssetCollateralData ( data )
 
-Override to import attachments
+Override to import attachments from old versions of WebGUI
 
 =cut
 
 sub importAssetCollateralData {
     my ( $self, $data, @args ) = @_;
-    $self->removeAttachments;
-    $self->addAttachments( $data->{template_attachments} );
+    if ( $data->{template_attachments} ) {
+        $self->update( { attachmentsJson => JSON::to_json($data->{template_attachments}) } );
+    }
     return $self->SUPER::importAssetCollateralData( $data, @args );
 }
+
     
 #-------------------------------------------------------------------
 
@@ -509,8 +606,6 @@ sub packTemplate {
     my ( $self, $template ) = @_;
     my $packed  = $template;
     HTML::Packer::minify( \$packed, {
-        remove_comments     => 1,
-        remove_newlines     => 1,
         do_javascript       => "shrink",
         do_stylesheet       => "minify",
     } );
@@ -551,15 +646,15 @@ sub prepare {
 
 	$style->setRawHeadTags($headBlock);
 
+    my %props = ( type => 'text/css', rel => 'stylesheet' );
 	foreach my $sheet ( @{ $self->getAttachments('stylesheet') } ) {
-		my %props = ( type => 'text/css', rel => 'stylesheet' );
 		$style->setLink($sheet->{url}, \%props);
 	}
 
 	my $doScripts = sub {
 		my ($type, $body) = @_;
+        my %props = ( type => 'text/javascript' );
 		foreach my $script ( @{ $self->getAttachments($type) } ) {
-			my %props = ( type => 'text/javascript' );
 			$style->setScript($script->{url}, \%props, $body);
 		}
 	};
@@ -592,14 +687,18 @@ sub process {
 
     if ($self->get('state') =~ /^trash/) {
         my $i18n = WebGUI::International->new($session, 'Asset_Template');
+        my $url  = $session->asset ? $session->asset->get('url')  ##Called via asset
+                                   : $session->url->getRaw();     ##Called via operation, like auth
         $session->errorHandler->warn('process called on template in trash: '.$self->getId
-            .'. The template was called through this url: '.$session->asset->get('url'));
+            .". The template was called through this url: $url");
         return $session->var->isAdminOn ? $i18n->get('template in trash') : '';
     }
     elsif ($self->get('state') =~ /^clipboard/) {
         my $i18n = WebGUI::International->new($session, 'Asset_Template');
+        my $url  = $session->asset ? $session->asset->get('url')
+                                   : $session->url->getRaw();
         $session->errorHandler->warn('process called on template in clipboard: '.$self->getId
-            .'. The template was called through this url: '.$session->asset->get('url'));
+            .". The template was called through this url: $url");
         return $session->var->isAdminOn ? $i18n->get('template in clipboard') : '';
     }
 
@@ -607,6 +706,15 @@ sub process {
     if ( defined $session->request && $session->request->headers_in->{Accept} eq 'application/json' ) {
        $session->http->setMimeType( 'application/json' );
        return to_json( $vars );
+    }
+
+    my $stow = $session->stow;
+    my $show = $stow->get('showTemplateVars');
+    if ( $show && $show->{assetId} eq $self->getId && $self->canEdit ) {
+        # This will never be true again, cause we're getting rid of assetId
+        delete $show->{assetId};
+        $show->{vars} = $vars;
+        $stow->set( showTemplateVars => $show );
     }
 
 	$self->prepare unless ($self->{_prepared});
@@ -618,13 +726,66 @@ sub process {
     my $output;
     eval { $output = $parser->process($template, $vars); };
     if (my $e = Exception::Class->caught) {
-        $session->log->error(sprintf "Error processing template: %s, %s, %s", $self->getUrl, $self->getId, $e->error);
+    	my $message = ref $e ? $e->error : $e;
+        $session->log->error(sprintf "Error processing template: %s, %s, %s", $self->getUrl, $self->getId, $message);
         my $i18n = WebGUI::International->new($session, 'Asset_Template');
-        $output = sprintf $i18n->get('template error').$e->error, $self->getUrl, $self->getId;
+        $output = sprintf $i18n->get('template error').$message, $self->getUrl, $self->getId;
     }
 	return $output;
 }
 
+#-------------------------------------------------------------------
+
+# Used for debugging and the template test renderer.
+
+# WARNING: Please do not rely on this behavior. It's a bit of a hack, and
+# should not be considered part of the core API. Eventually, we will have
+# introspectable template objects so that you can more easily (and
+# efficiently) get this kind of information.
+
+# If the first value for the 'X-Webgui-Template-Variables' header is our
+# assetId, then in addition to processing the template, append add a json
+# representation of our template variables to the response. The headers
+# "X-Webgui-Template-Variables-Start" and "X-Webgui-Template-Variables-End"
+# will contain the delimiters for the start and end of this content so that
+# the user agent (who had to have stuck the header in in the first place) can
+# parse it out.  The delimiters will make the whole thing look like an xml
+# comment (<!-- ... -->) just in case.
+
+# We would just send the vars in the header, but different webservers have
+# different limits on header field size and it's impossible to say whether our
+# data will fit inside them or not.
+
+# This is intended to be called earlier in the request cycle (in the Content
+# URL handler) so that the headers get sent before any chunked content starts
+# being set up.  We set the stow here and check it during process() to see
+# whether we need to include the delimited json. Later on, Content will call
+# call getVariableJson to get the results.
+
+{
+    my $head = 'X-Webgui-Template-Variables';
+    my @chr  = ('0'..'9', 'a'..'z', 'A'..'Z');
+
+    sub processVariableHeaders {
+        my ($class, $session) = @_;
+        my $r = $session->request;
+        if (my $id = $r->headers_in->{$head}) {
+            my $rnd = join('', map { $chr[int(rand($#chr))] } (1..32));
+            my $out = $r->headers_out;
+            my $st  = "<!-- $rnd ";
+            my $end = " $rnd -->";
+            $out->{"$head-Start"} = $st;
+            $out->{"$head-End"}   = $end;
+            $session->stow->set(
+                showTemplateVars => {
+                    assetId        => $id,
+                    startDelimiter => $st,
+                    endDelimiter   => $end,
+                }
+            );
+        }
+    }
+}
 
 #-------------------------------------------------------------------
 
@@ -636,6 +797,7 @@ Extends the master class to handle template parsers, namespaces and template att
 
 sub processPropertiesFromFormPost {
 	my $self = shift;
+        my $session = $self->session;
 	$self->SUPER::processPropertiesFromFormPost;
     # TODO: Perhaps add a way to check template syntax before it blows stuff up?
     my %data;
@@ -658,28 +820,7 @@ sub processPropertiesFromFormPost {
     }
 
     ### Template attachments
-    my $f    = $self->session->form;
-    my $p    = $f->paramsHashRef;
-    my @nums = grep {$_} map { my ($i) = /^attachmentUrl(\d+)$/; $i } keys %$p;
-    my @add;
-    
-    # Remove all attachments first, then re-add whatever's left in the form
-    $self->removeAttachments;
-
-    foreach my $n (@nums) {
-        my ($index, $type, $url) = 
-            map { $f->process('attachment' . $_ . $n) }
-            qw(Index Type Url);
-
-        push(
-            @add, {
-                sequence     => $index,
-                url          => $url,
-                type         => $type,
-            }
-        );
-    }
-    $self->addAttachments(\@add);
+    $self->update({ attachmentsJson => $session->form->process( 'attachmentsJson', 'JsonTable' ), });
 
     return;
 }
@@ -719,23 +860,31 @@ sub processRaw {
 
 #-------------------------------------------------------------------
 
-=head2 purgeRevision ( )
+=head2 purge ( )
 
-Override the master purgeRevision to purge attachments
+Extend the base method to handle purging the User Function Style template and destroying your site.
+If the current template is the User Function Style template with the Fail Safe template.
 
 =cut
 
-sub purgeRevision {
-    my $self = shift;
-    $self->removeAttachments;
-    return $self->SUPER::purgeRevision(@_);
+sub purge {
+	my $self = shift;
+    my $returnValue = $self->SUPER::purge;
+    if ($returnValue && $self->getId eq $self->session->setting->get('userFunctionStyleId')) {
+        $self->session->setting->set('userFunctionStyleId', 'PBtmpl0000000000000060');
+    }
+	return $returnValue;
 }
 
 #-------------------------------------------------------------------
 
 =head2 removeAttachments ( urls )
 
-Removes attachments. C<urls> is an arrayref of URLs to remove. If C<urls>
+Removes attachments. 
+
+=head3 urls
+
+C<urls> is an arrayref of URLs to remove. If C<urls>
 is not defined, will remove all attachments for this revision.
 
 =cut
@@ -743,28 +892,14 @@ is not defined, will remove all attachments for this revision.
 sub removeAttachments {
     my ($self, $urls) = @_;
 
-    my $db    = $self->session->db;
-    my $dbh   = $db->dbh;
-    my $rmsql = qq{
-        DELETE FROM 
-            template_attachments
-        WHERE
-            templateId = ?
-            AND revisionDate = ?
-    };
-    
-    if ( $urls && @{$urls} ) {
-        my $in    = join(',', map { $dbh->quote($_) } @{$urls});
-        $rmsql .= qq{
-            AND url IN ($in)
-        };
+    my @attachments = ();
+
+    if ($urls) {
+        @attachments = grep { !isIn($_->{url}, @{ $urls }) } @{ $self->getAttachments() };
     }
 
-    my @params = (
-        $self->getId,
-        $self->get('revisionDate'),
-    );
-    $db->write($rmsql, \@params);
+    my $json = JSON->new->encode( \@attachments );
+    $self->update({ attachmentsJson => $json, });
 }
 
 #-------------------------------------------------------------------
@@ -838,7 +973,7 @@ ENDHTML
                 . $i18n->get( "warning default template" )
                 . q{</p><p>}
                 . sprintf( q{<a href="} . $duplicateUrl . q{">%s</a>}, $i18n->get( "make duplicate label" ) )
-                . q{</p></div}
+                . q{</p></div>}
                 ;
     }
     
@@ -1182,6 +1317,42 @@ sub www_styleWizard {
 	}
 	$self->getAdminConsole->addSubmenuItem($self->getUrl('func=edit'),$i18n->get("edit template")) if ($self->get("url"));
         return $self->getAdminConsole->render($output,$i18n->get('style wizard'));
+}
+
+#-------------------------------------------------------------------
+
+=head2 www_preview
+
+Rendes this template with the given variables (posted as JSON)
+
+=cut
+
+sub www_preview {
+    my $self    = shift;
+    my $session = $self->session;
+    return $session->privilege->insufficient unless $self->canEdit;
+
+    my $form = $session->form;
+    my $http = $session->http;
+
+    try {
+        my $output = $self->processRaw(
+            $session,
+            $form->get('template'),
+            from_json($form->get('variables')),
+            $form->get('parser'),
+        );
+        if ($form->get('plainText')) {
+            $http->setMimeType('text/plain');
+        }
+        elsif ($output !~ /<html>/) {
+            $output = $session->style->userStyle($output);
+        }
+        return $output;
+    } catch {
+        $http->setMimeType('text/plain');
+        $_[0];
+    }
 }
 
 #-------------------------------------------------------------------

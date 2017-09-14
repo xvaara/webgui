@@ -116,18 +116,18 @@ sub getCountries {
         'Cayman Islands',                        'Central African Republic',
         'Chad',                                  'Chile',
         'China',                                 'Christmas Island',
-        'Cocos (Keeling) Islands',               'Colombia',
-        'Comoros',                               'Congo',
-        'Congo, the Democratic Republic of the', 'Cook Islands',
-        'Costa Rica',                            'Cote d\'Ivoire',
-        'Croatia',                               'Cyprus',
-        'Czech Republic',                        'Denmark',
-        'Djibouti',                              'Dominica',
-        'Dominican Republic',                    'East Timor',
-        'Ecuador',                               'Egypt',
-        'El Salvador',                           'England',
-        'Equatorial Guinea',                     'Eritrea',
-        'Espana',                                'Estonia',
+        'Christmas Island (Kiribati)',           'Cocos (Keeling) Islands',
+        'Colombia',                              'Comoros',
+        'Congo',                                 'Congo, the Democratic Republic of the',
+        'Cook Islands',                          'Costa Rica',
+        'Cote d\'Ivoire',                        'Croatia',
+        'Cyprus',                                'Czech Republic',
+        'Denmark',                               'Djibouti',
+        'Dominica',                              'Dominican Republic',
+        'East Timor',                            'Ecuador',
+        'Egypt',                                 'El Salvador',
+        'England',                               'Equatorial Guinea',
+        'Eritrea',                               'Estonia',
         'Ethiopia',                              'Falkland Islands',
         'Faroe Islands',                         'Fiji',
         'Finland',                               'France',
@@ -245,20 +245,20 @@ sub isDynamicCompatible {
 
 #-------------------------------------------------------------------
 
-=head2 toHtml ( )
+=head2 new ( )
 
-Renders a country picker control.
+Extend the base "new" to set options.
 
 =cut
 
-sub toHtml {
-	my $self = shift;
-
+sub new {
+    my $class = shift;
+    my $self  = $class->SUPER::new(@_);
 	my %countries;
 	tie %countries, 'Tie::IxHash';
 	%countries = map {$_ => $_} getCountries();
-	$self->set("options", \%countries);
-	return $self->SUPER::toHtml();
+    $self->set('options', \%countries);
+    return $self;
 }
 
 1;

@@ -39,6 +39,7 @@ my $session = WebGUI::Test->session;
 ####################################################
 
 my $origToolbar = $session->user->profileField('toolbar');
+WebGUI::Test->addToCleanup(sub { $session->user->profileField('toolbar', $origToolbar); },);
 my $toolbars = $session->url->extras('toolbar/');
 
 my $newRequest = Test::MockObject->new;
@@ -111,7 +112,7 @@ is($extras, q!doSomething()!, "drag: set extras");
 
 $icon = $session->icon->delete('','','What did I ever do to you?');
 my ($onclick) = linkAndText($icon, 'a', 'onclick');
-is($onclick, "return confirm('What did I ever do to you?')", "delete: confirm text");
+is($onclick, "return confirm('What did I ever do to you?');", "delete: confirm text");
 
 ####################################################
 #
@@ -166,12 +167,6 @@ sub linkAndText {
 	my @parsedParams = map { $token->[1]{$_} || '-' } @params;
 
 	return @parsedParams;
-}
-
-my $icon = $session->icon->drag();
-
-END {
-	$session->user->profileField('toolbar', $origToolbar);
 }
 
 sub fetchTestSet {

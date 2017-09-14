@@ -37,6 +37,23 @@ These methods are available from this class:
 
 =cut
 
+#-------------------------------------------------------------------
+
+=head2 autoCommitUrl ( $base )
+
+Returns the url autoCommitWorkingIfEnabled would redirect to if it were going
+to.
+
+=cut
+
+sub autoCommitUrl {
+    my $self    = shift;
+    my $session = $self->session;
+    my $url     = $session->url;
+    my $base    = shift || $url->page;
+    my $id      = $self->getId;
+    return $url->append($base, "op=commitVersionTag;tagId=$id");
+}
 
 #-------------------------------------------------------------------
 
@@ -75,30 +92,36 @@ sub autoCommitWorkingIfEnabled {
     return undef
         unless $versionTag;
 
-    #Auto commit is no longer determined from autoRequestCommit
-
-    # auto commit assets
-    # save and commit button and site wide auto commit work the same
-    # Do not auto commit if tag is system wide tag or tag belongs to someone else
-    if (
-        $options->{override}
-      || ( $class->getVersionTagMode($session) eq q{autoCommit}
-        && ! $versionTag->get(q{isSiteWide})
-        && $versionTag->get(q{createdBy}) eq $session->user()->userId()
-         )
-    ) {
+    if ($options->{override} || $versionTag->canAutoCommit) {
         if ($session->setting->get("skipCommitComments") || !$options->{allowComments}) {
             $versionTag->requestCommit;
             return 'commit';
         }
         else {
-            my $url = $options->{returnUrl} || $session->url->page;
-            $url = $session->url->append($url, "op=commitVersionTag;tagId=" . $versionTag->getId);
+            my $url = $versionTag->autoCommitUrl($options->{returnUrl});
             $session->http->setRedirect($url);
             return 'redirect';
         }
     }
     return undef;
+}
+
+#-------------------------------------------------------------------
+
+=head2 canAutoCommit
+
+Returns true if we would autocommit this tag without an override.
+
+=cut
+
+sub canAutoCommit {
+    my $self    = shift;
+    my $session = $self->session;
+    my $class   = ref $self;
+    my $mode    = $class->getVersionTagMode($session);
+    return $mode eq 'autoCommit'
+        && !$self->get('isSiteWide')
+        && $self->get('createdBy') eq $session->user->userId;
 }
 
 #-------------------------------------------------------------------
@@ -184,6 +207,64 @@ sub commit {
 		return 1;
 	}
 	return 2;
+}
+
+#-------------------------------------------------------------------
+
+=head2 commitAsUser ( userId , options )
+
+Commits the working tab.  If userId is passed in, commit will be done as that user
+
+=head3 userId
+
+User to commit tag as
+
+=head3 options
+
+hash ref of options to pass in
+
+=head4 comments
+
+optional comments to set in the version tag
+
+=head4 commitNow
+
+optional boolean which, if set, will perform an immediate.
+
+=cut
+
+sub commitAsUser {
+    my $self        = shift;
+    my $session     = $self->session;
+    my $config      = $session->config;
+    my $userId      = shift;
+    my $options     = shift;
+    my $commitNow   = $options->{commitNow};
+    my $comments    = $options->{comments};
+
+    return 0 unless (defined $userId);
+
+    #Open a new session
+    my $new_session = WebGUI::Session->open( $config->getWebguiRoot, $config->getFilename );
+    #Set the userId in the new session
+    $new_session->user( { userId => $userId } );
+
+    #Clone the tag into a new version tag in the new session
+    my $new_tag = __PACKAGE__->new( $new_session, $self->getId );
+    
+    if ( defined $new_tag ) {
+        $new_tag->set( { comments => $comments } );
+        if ($commitNow) {
+            $new_tag->commit;
+        }
+        else {
+            $new_tag->requestCommit;
+        }
+    }
+    #End the new session
+    $new_session->var->end;
+    $new_session->close;
+    return 1;
 }
 
 
@@ -438,15 +519,15 @@ sub getWorking {
     #First see if there is already a version tag
     $tag = $stow->get(q{versionTag});
 
-    return $tag if $tag;
+    return $tag if ($tag && !$tag->isLocked);
 
     $tagId = $session->scratch()->get(q{versionTag});
     if ($tagId) {
         $tag = $class->new($session, $tagId);
-
-        $stow->set(q{versionTag}, $tag);
-
-        return $tag;
+        unless ($tag->isLocked) {
+            $stow->set(q{versionTag}, $tag);
+            return $tag;
+        }
     }
 
     #No tag found. Create or reclaim one?
@@ -475,10 +556,10 @@ sub getWorking {
         # For now, we only reclaim if 1 tag open.
         if (scalar @openTags == 1) {
             $tag = $openTags[0];
-
-            $tag->setWorking();
-
-            return $tag;
+            unless ($tag->isLocked) {
+                $tag->setWorking();
+                return $tag;
+            }
         }
     }
     elsif ($mode eq q{siteWide}) {
@@ -486,7 +567,7 @@ sub getWorking {
 
       OPENTAG:
         foreach my $openTag (@{WebGUI::VersionTag->getOpenTags($session)}) {
-            if ($openTag->get(q{isSiteWide})) {
+            if ($openTag->get(q{isSiteWide}) && !$openTag->isLocked) {
 
                 $tag = $openTag;
 
@@ -512,6 +593,16 @@ sub getWorking {
 
     return $tag;
 } #getWorking
+
+#-------------------------------------------------------------------
+
+=head2 isLocked ( )
+
+Returns boolean value indicating whether tag is locked
+
+=cut
+
+sub isLocked { $_[0]{_data}{isLocked} }
 
 #-------------------------------------------------------------------
 
@@ -592,7 +683,6 @@ sub requestCommit {
 	$self->{_data}{workflowInstanceId} = $instance->getId;
 	$self->session->db->setRow("assetVersionTag","tagId",$self->{_data});
     return $instance->start;
-    return undef;
 }
 
 
@@ -630,6 +720,10 @@ sub rollback {
         $outputSub->(sprintf $i18n->get('Rolling back %s'), $revision->getTitle);
 		$revision->purgeRevision;
 	}
+    my $instance = $self->getWorkflowInstance;
+    if ($instance) {
+        $instance->delete;
+    }
 	$session->db->write("delete from assetVersionTag where tagId=?", [$tagId]);
 	$self->clearWorking;
 	return 1;
@@ -734,6 +828,7 @@ Sets this tag as the working tag for the current user.
 
 sub setWorking {
 	my $self = shift;
+	return if $self->isLocked;
 	$self->session->scratch->set("versionTag",$self->getId);
 	$self->session->stow->set("versionTag", $self);
 }

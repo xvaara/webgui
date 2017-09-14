@@ -121,12 +121,50 @@ Overridden to check the revision dates of children as well
 
 sub getContentLastModified {
     my $self = shift;
-    my $mtime = $self->get("revisionDate");
-    foreach my $child (@{ $self->getLineage(["children"],{returnObjects=>1}) }) {
+    my $mtime = $self->get("lastModified");
+    my $childIter = $self->getLineageIterator(["children"]);
+    while ( 1 ) {
+        my $child;
+        eval { $child = $childIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $self->session->log->error($x->full_message);
+            next;
+        }
+        last unless $child;
         my $child_mtime = $child->getContentLastModified;
         $mtime = $child_mtime if ($child_mtime > $mtime);
     }
     return $mtime;
+}
+
+#-------------------------------------------------------------------
+
+=head2 getContentLastModifiedBy
+
+Overridden to check the updated dates of children as well
+
+=cut
+
+sub getContentLastModifiedBy {
+    my $self      = shift;
+    my $mtime     = $self->SUPER::getContentLastModified;
+    my $userId    = $self->get('revisedBy');
+    my $childIter = $self->getLineageIterator(["children"]);
+    while ( 1 ) {
+        my $child;
+        eval { $child = $childIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $self->session->log->error($x->full_message);
+            next;
+        }
+        last unless $child;
+        my $child_mtime = $child->getContentLastModified;
+        if ($child_mtime > $mtime) {
+            $mtime = $child_mtime;
+            $userId = $child->get("revisedBy");
+        }
+    }
+    return $userId;
 }
 
 #-------------------------------------------------------------------
@@ -233,7 +271,7 @@ sub view {
 	my $vars    = $self->getTemplateVars;
     # TODO: Getting the children template vars should be a seperate method.
 	
-    my %rules   = ( returnObjects => 1);
+    my %rules   = ( );
     if ( $self->get( "sortAlphabetically" ) ) {
         $rules{ orderByClause   } = "assetData.title " . $self->get( "sortOrder" );
     }
@@ -241,9 +279,16 @@ sub view {
         $rules{ orderByClause   } = "asset.lineage " . $self->get( "sortOrder" );
     }
 
-	my $children    = $self->getLineage( ["children"], \%rules);
-	foreach my $child ( @{ $children } ) {
-        # TODO: Instead of this it should be using $child->getTemplateVars || $child->get
+	my $childIter    = $self->getLineageIterator( ["children"], \%rules);
+        while ( 1 ) {
+            my $child;
+            eval { $child = $childIter->() };
+            if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+                $self->session->log->error($x->full_message);
+                next;
+            }
+            last unless $child;
+            # TODO: Instead of this it should be using $child->getTemplateVars || $child->get
 		if ( $child->isa("WebGUI::Asset::Wobject::Folder") ) {
 			push @{ $vars->{ "subfolder_loop" } }, {
 				id           => $child->getId,
@@ -268,6 +313,7 @@ sub view {
 				"icon.small"    => $child->getIcon(1),
 				"icon.big"      => $child->getIcon,
 				type            => $child->getName,
+				extension	=> WebGUI::Storage->getFileExtension( $child->get("filename")),
 				url             => $child->getUrl,
 				canEdit         => $child->canEdit,
 				controls        => $child->getToolbar,

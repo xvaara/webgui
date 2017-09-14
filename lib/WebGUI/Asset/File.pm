@@ -21,7 +21,7 @@ use WebGUI::Cache;
 use WebGUI::Storage;
 use WebGUI::SQL;
 use WebGUI::Utility;
-
+use WebGUI::Event;
 
 =head1 NAME
 
@@ -59,6 +59,7 @@ sub addRevision {
     if ($newSelf->get("storageId") && $newSelf->get("storageId") eq $self->get('storageId')) {
         my $newStorage = $self->getStorageClass->get($self->session,$self->get("storageId"))->copy;
         $newSelf->update({storageId => $newStorage->getId});
+        $newSelf->applyConstraints;
     }
 
     return $newSelf;
@@ -78,10 +79,37 @@ A hash reference of optional parameters. None at this time.
 
 sub applyConstraints {
     my $self = shift;
-	$self->getStorageLocation->setPrivileges($self->get('ownerUserId'), $self->get('groupIdView'), $self->get('groupIdEdit'));
+    $self->setPrivileges;
     $self->setSize;
 }
 
+sub setPrivileges {
+    my $self = shift;
+    $self->getStorageLocation->setPrivileges(
+        $self->get('ownerUserId'),
+        $self->get('groupIdView'),
+        $self->get('groupIdEdit'),
+    );
+}
+
+#----------------------------------------------------------------------------
+
+=head2 commit ( )
+
+Override commit to remove all privileges for previous revisions' storage 
+locations
+
+=cut
+
+sub commit {
+    my ( $self, @args ) = @_;
+
+    for my $rev ( grep { $_->get("revisionDate") < $self->get("revisionDate") } @{$self->getRevisions} ) {
+        $rev->getStorageLocation->trash;
+    }
+
+    return $self->SUPER::commit( @args );
+}
 
 #-------------------------------------------------------------------
 
@@ -200,6 +228,7 @@ sub exportWriteFile {
         WebGUI::Error->throw(error => "can't copy " . $self->getStorageLocation->getPath($self->get('filename'))
             . ' to ' . $dest->absolute->stringify . ": $!");
     }
+    fire $self->session, 'asset::export' => $dest;
 }
 
 #-------------------------------------------------------------------
@@ -370,6 +399,7 @@ sub indexContent {
 	my $self = shift;
 	my $indexer = $self->SUPER::indexContent;
 	$indexer->addFile($self->getStorageLocation->getPath($self->get("filename")));
+	return $indexer;
 }
 
 
@@ -419,7 +449,6 @@ sub processPropertiesFromFormPost {
     return undef;
 }
 
-
 #-------------------------------------------------------------------
 
 =head2 purge 
@@ -464,6 +493,20 @@ sub purgeRevision {
 	my $self = shift;
 	$self->getStorageLocation->delete;
 	return $self->SUPER::purgeRevision;
+}
+
+#----------------------------------------------------------------------------
+
+=head2 restore ( )
+
+Override trash restore to restore storage location
+
+=cut
+
+sub restore {
+    my ( $self, @args ) = @_;
+    $self->setPrivileges;
+    return $self->SUPER::restore( @args );
 }
 
 #----------------------------------------------------------------------------
@@ -550,6 +593,23 @@ sub setStorageLocation {
     }
 }
 
+#----------------------------------------------------------------------------
+
+=head2 trash ( )
+
+Override to put the attached file in the trash too
+
+=cut
+
+sub trash {
+    my ( $self, @args ) = @_;
+    my $return = $self->SUPER::trash( @args );
+
+    $self->getStorageLocation->trash;
+
+    return $return;
+}
+
 #-------------------------------------------------------------------
 
 =head2 update
@@ -569,10 +629,10 @@ sub update {
 	$self->SUPER::update(@_);
 	##update may have entered a new storageId.  Reset the cached one just in case.
 	if ($self->get("storageId") ne $before{storageId}) {
-		$self->setStorageLocation;
+		delete $self->{_storageLocation};
 	}
 	if ($self->get("ownerUserId") ne $before{owner} || $self->get("groupIdEdit") ne $before{edit} || $self->get("groupIdView") ne $before{view}) {
-		$self->getStorageLocation->setPrivileges($self->get("ownerUserId"),$self->get("groupIdView"),$self->get("groupIdEdit"));
+        $self->setPrivileges;
 	}
 }
 
@@ -608,7 +668,8 @@ Generate the view method for the Asset, and handle caching.
 sub view {
 	my $self = shift;
 	if (!$self->session->var->isAdminOn && $self->get("cacheTimeout") > 10) {
-		my $out = WebGUI::Cache->new($self->session,"view_".$self->getId)->get;
+        my $cache = $self->getCache;
+        my $out   = $cache->get if defined $cache;
 		return $out if $out;
 	}
 	my %var = %{$self->get};
@@ -616,6 +677,8 @@ sub view {
 	$var{fileUrl} = $self->getFileUrl;
 	$var{fileIcon} = $self->getFileIconUrl;
 	$var{fileSize} = formatBytes($self->get("assetSize"));
+	$var{extension} = WebGUI::Storage->getFileExtension( $self->get("filename"));
+
        	my $out = $self->processTemplate(\%var,undef,$self->{_viewTemplate});
 	if (!$self->session->var->isAdminOn && $self->get("cacheTimeout") > 10) {
 		WebGUI::Cache->new($self->session,"view_".$self->getId)->set($out,$self->get("cacheTimeout"));

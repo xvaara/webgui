@@ -21,6 +21,9 @@ use WebGUI::International;
 use WebGUI::VersionTag;
 use WebGUI::HTMLForm;
 use WebGUI::Paginator;
+use WebGUI::Fork;
+use Monkey::Patch;
+use JSON;
 
 =head1 NAME
 
@@ -136,6 +139,51 @@ sub getVersionTagOptions {
 
     return %tag;
 }
+
+#----------------------------------------------------------------------------
+
+=head2 rollbackInFork ($process, $tagId)
+
+WebGUI::Fork method called by www_rollbackVersionTag
+
+=cut
+
+sub rollbackInFork {
+    my ( $process, $tagId ) = @_;
+    my $session = $process->session;
+    my $tag = WebGUI::VersionTag->new( $session, $tagId );
+    my %status = (
+        current => 0,
+        total    => $process->session->db->quickScalar( 'SELECT count(*) FROM assetData WHERE tagId = ?', [$tagId] ),
+        message  => '',
+    );
+    my $update = sub {
+        $process->update( sub { JSON::encode_json( \%status ) } );
+    };
+    my $patch = Monkey::Patch::patch_class(
+        'WebGUI::Asset',
+        'purgeRevision',
+        sub {
+            my $purgeRevision = shift;
+            my $self          = shift;
+            $self->$purgeRevision(@_);
+            $status{current}++;
+            $update->();
+        }
+    );
+    $update->();
+    $tag->rollback( {
+            outputSub => sub {
+                $status{message} = shift;
+                $update->();
+            }
+        }
+    );
+
+    # need to get at least one of these in for the degenerate case of no
+    # revisions in tag
+    $update->();
+} ## end sub rollbackInFork
 
 #-------------------------------------------------------------------
 
@@ -373,10 +421,9 @@ sub www_commitVersionTag {
             $session->url->page("op=commitVersionTag;tagId=".$tag->getId),
         );
     $p->setDataByQuery(q{
-        SELECT assetData.revisionDate, users.username, asset.assetId, asset.className 
+        SELECT assetData.revisionDate, assetData.revisedBy, asset.assetId, asset.className 
         FROM assetData 
         LEFT JOIN asset ON assetData.assetId = asset.assetId
-        LEFT JOIN users ON assetData.revisedBy = users.userId
         WHERE assetData.tagId=? },
         undef, 
         undef, 
@@ -384,8 +431,9 @@ sub www_commitVersionTag {
     );
 
     foreach my $row ( @{$p->getPageData} ) {
-        my ( $date, $by, $id, $class) = @{ $row }{ qw( revisionDate username assetId className ) };
+        my ( $date, $byUserId, $id, $class) = @{ $row }{ qw( revisionDate revisedBy assetId className ) };
         my $asset = WebGUI::Asset->new($session, $id, $class, $date);
+        my $byUser = WebGUI::User->new( $session, $byUserId );
         $output 
             .= '<tr><td>'
             .$session->icon->view("func=view;revision=".$date, $asset->get("url"))
@@ -393,7 +441,7 @@ sub www_commitVersionTag {
             <td>'.$asset->getTitle.'</td>
             <td><img src="'.$asset->getIcon(1).'" alt="'.$asset->getName.'" />'.$asset->getName.'</td>
             <td>'.$session->datetime->epochToHuman($date).'</td>
-            <td>'.$by.'</td></tr>';
+            <td>'.$byUser->get('username').'</td></tr>';
     }
     $output .= '</table>'.$p->getBarSimple;
     
@@ -464,7 +512,9 @@ A reference to the current session.
 
 sub www_leaveVersionTag {
     my $session = shift;
-    WebGUI::VersionTag->getWorking($session)->leaveTag;
+	
+	my $tag = $session->scratch()->get(q{versionTag});
+    WebGUI::VersionTag->getWorking($session)->leaveTag if $tag;
     return www_manageVersions($session);
 }
 
@@ -532,7 +582,7 @@ sub www_managePendingVersions {
 	$ac->addSubmenuItem($session->url->page('op=manageCommittedVersions'), $i18n->get("manage committed versions")) if canView($session);
         my $output = '<table width="100%" class="content">
         <tr><th>'.$i18n->get("version tag name").'</th></tr> ';
-        my $sth = $session->db->read("select tagId,name,commitDate,committedBy from assetVersionTag where isCommitted=0 and isLocked=1");
+        my $sth = $session->db->read("select tagId,name from assetVersionTag where isCommitted=0 and isLocked=1");
         while (my ($id,$name) = $sth->array) {
                 $output .= '<tr>
 			<td><a href="'.$session->url->page("op=manageRevisionsInTag;tagId=".$id).'">'.$name.'</a></td>
@@ -563,8 +613,8 @@ sub www_manageVersions {
 	my $i18n = WebGUI::International->new($session,"VersionTag");
     my ($icon, $url, $datetime, $user) = $session->quick(qw(icon url datetime user));
 	$ac->addSubmenuItem($url->page('op=editVersionTag'), $i18n->get("add a version tag"));
-	$ac->addSubmenuItem($url->page('op=managePendingVersions'), $i18n->get("manage pending versions")) if canView($session);
-	$ac->addSubmenuItem($url->page('op=manageCommittedVersions'), $i18n->get("manage committed versions")) if canView($session);
+	$ac->addSubmenuItem($url->page('op=managePendingVersions'), $i18n->get("manage pending versions"));
+	$ac->addSubmenuItem($url->page('op=manageCommittedVersions'), $i18n->get("manage committed versions"));
 	my ($tag,$workingTagId) = $session->db->quickArray("select name,tagId from assetVersionTag where tagId=?",[$session->scratch->get("versionTag")]);
 	$tag ||= "None";
 	my $rollback = $i18n->get("rollback");
@@ -580,9 +630,7 @@ sub www_manageVersions {
 		my $u = WebGUI::User->new($session,$tag->get("createdBy"));
 		$output .= '<tr>
 			<td>';
-        if (canView($session)) {
-				$output .= $icon->delete("op=rollbackVersionTag;tagId=".$tag->getId,undef,$rollbackPrompt);
-        }
+        $output .= $icon->delete("op=rollbackVersionTag;tagId=".$tag->getId,undef,$rollbackPrompt);
         $output .= $icon->edit("op=editVersionTag;tagId=".$tag->getId)
 			.'</td>
 			<td><a href="'.$url->page("op=manageRevisionsInTag;tagId=".$tag->getId).'">'.$tag->get("name").'</a></td>
@@ -641,7 +689,7 @@ sub www_manageRevisionsInTag {
                 sprintf $html, 
                     $i18n->get( "error permission www_manageRevisionsInTag title" ),
                     $i18n->get( "error permission www_manageRevisionsInTag body" ),
-                    $session->url->getSiteURL,
+                    $session->url->getSiteURL . $session->url->gateway,
                     $i18n->get( "back to site" ),
                 );
         }
@@ -655,8 +703,9 @@ sub www_manageRevisionsInTag {
 
     # Process any actions
     my $action     = lc $session->form->get('action');
+    my $form       = $session->form;
     my $validToken = $session->form->validToken;
-    if ( $action eq "purge" && $validToken) {
+    if ( $form->get('purge') && $validToken) {
         # Purge these revisions
         my @assetInfo       = $session->form->get('assetInfo'); 
         for my $assetInfo ( @assetInfo ) {
@@ -671,7 +720,7 @@ sub www_manageRevisionsInTag {
             return www_manageVersions( $session );
         }
     }
-    elsif ( $action eq "move to:" && $validToken) {
+    elsif ( $form->get('moveto') && $validToken) {
         # Get the new version tag
         my $moveToTagId = $session->form->get('moveToTagId');
         my $moveToTag;
@@ -699,7 +748,7 @@ sub www_manageRevisionsInTag {
             return www_manageVersions( $session );
         }
     }
-    elsif ( $action eq "update version tag" && $validToken) {
+    elsif ( $form->get('update') && $validToken) {
         my $startTime = WebGUI::DateTime->new($session,$session->form->process("startTime","dateTime"))->toDatabase;
         my $endTime   = WebGUI::DateTime->new($session,$session->form->process("endTime","dateTime"))->toDatabase;
         
@@ -785,19 +834,19 @@ sub www_manageRevisionsInTag {
             value => WebGUI::DateTime->new($session,$filterEndTime)->epoch,
         })
         . '<br />'
-        . '<input type="submit" name="action" value="'. $i18n->get('manageRevisionsInTag update') . '" />'
+        . '<input type="submit" name="update" value="'. $i18n->get('manageRevisionsInTag update') . '" />'
         . '</td>'
         . '</tr>'
         . '<tr><td colspan="5">&nbsp;</td></tr>'
         . '<tr>'
         . '<td colspan="5">'
         . $i18n->get("manageRevisionsInTag with selected")
-        . '<input type="submit" name="action" value="'. $i18n->get("manageRevisionsInTag move")  . '" />'
+        . '<input type="submit" name="moveto" value="'. $i18n->get("manageRevisionsInTag move")  . '" />'
         . WebGUI::Form::SelectBox( $session, {
             name        => 'moveToTagId',
             options     => \%moveToTagOptions,
         } )
-        . '&nbsp;<input type="submit" name="action" value="'. $i18n->get('manageRevisionsInTag purge') . '" class="red" />'
+        . '&nbsp;<input type="submit" name="purge" value="'. $i18n->get('manageRevisionsInTag purge') . '" class="red" />'
         . '</td>'
         . '</tr>'
         . '<tr>'
@@ -809,11 +858,12 @@ sub www_manageRevisionsInTag {
         . '</tr> '
         ;
     my $p = WebGUI::Paginator->new($session,$session->url->page("op=manageRevisionsInTag;tagId=".$tag->getId));
-    $p->setDataByQuery("select assetData.revisionDate, users.username, asset.assetId, asset.className from assetData 
-            left join asset on assetData.assetId=asset.assetId left join users on assetData.revisedBy=users.userId
+    $p->setDataByQuery("select assetData.revisionDate, assetData.revisedBy, asset.assetId, asset.className from assetData 
+            left join asset on assetData.assetId=asset.assetId
             where assetData.tagId=?",undef, undef, [$tag->getId]);
     foreach my $row (@{$p->getPageData}) {
-            my ($date,$by,$id, $class) = ($row->{revisionDate}, $row->{username}, $row->{assetId}, $row->{className});
+            my ($date,$byUserId,$id, $class) = ($row->{revisionDate}, $row->{revisedBy}, $row->{assetId}, $row->{className});
+            my $byUser  = WebGUI::User->new( $session, $byUserId );
             my $asset = WebGUI::Asset->new($session,$id,$class,$date);
             # A checkbox for delete and move actions
             my $checkbox    = WebGUI::Form::checkbox( $session, {
@@ -827,7 +877,7 @@ sub www_manageRevisionsInTag {
                     <td>'.$asset->getTitle.'</td>
                     <td><img src="'.$asset->getIcon(1).'" alt="'.$asset->getName.'" />'.$asset->getName.'</td>
                     <td>'.$session->datetime->epochToHuman($date).'</td>
-                    <td>'.$by.'</td></tr>';
+                    <td>'.$byUser->username.'</td></tr>';
     }
     $output .= '</table>'.$p->getBarSimple.WebGUI::Form::formFooter( $session );
     $tag = $session->db->getRow("assetVersionTag","tagId",$tag->getId);
@@ -852,16 +902,27 @@ sub www_rollbackVersionTag {
 	return $session->privilege->adminOnly() unless canView($session);
 	my $tagId = $session->form->process("tagId");
 	return $session->privilege->vitalComponent() if ($tagId eq "pbversion0000000000001");
-    my $pb      = WebGUI::ProgressBar->new($session);
-    my $i18n    = WebGUI::International->new($session, 'VersionTag');
-    $pb->start($i18n->get('rollback version tag'), $session->url->extras('adminConsole/versionTags.gif'));
-	if ($tagId) {
-		my $tag = WebGUI::VersionTag->new($session, $tagId);
-		$tag->rollback({ outputSub => sub { $pb->update(@_) }, }) if defined $tag;
-	}
+
+    my $process = WebGUI::Fork->start(
+        $session, 'WebGUI::Operation::VersionTag', 'rollbackInFork', $tagId
+    );
+
+    my $i18n = WebGUI::International->new($session, 'VersionTag');
 	my $method = $session->form->process("proceed");
     $method    = $method eq "manageCommittedVersions" ? $method : 'manageVersions';
-    $pb->finish(WebGUI::Asset->getDefault($session)->getUrl('op='.$method));
+    my $redir = WebGUI::Asset->getDefault($session)->getUrl("op=$method");
+    $session->http->setRedirect(
+        $session->url->page(
+            $process->contentPairs(
+                'ProgressBar', {
+                    icon    => 'versions',
+                    title   => $i18n->get('rollback version tag'),
+                    proceed => $redir,
+                }
+            )
+        )
+    );
+    return 'redirect';
 }
 
 

@@ -19,6 +19,7 @@ use WebGUI::International;
 use WebGUI::Paginator;
 use WebGUI::SQL;
 use WebGUI::Utility;
+use POSIX qw/ceil/;
 
 our @ISA = qw(WebGUI::Asset::Post);
 
@@ -41,7 +42,7 @@ sub addRevision {
 
 =head2 archive 
 
-Archives all posts under this thread.
+Archives all posts under this thread.  Update the thread count in the parent CS.
 
 =cut
 
@@ -50,6 +51,8 @@ sub archive {
 	foreach my $post (@{$self->getPosts}) {
 		$post->setStatusArchived;
 	}
+    my $cs = $self->getParent;
+    $cs->incrementThreads($cs->get("lastPostDate"), $cs->get("lastPostId"));
 }
 
 #-------------------------------------------------------------------
@@ -64,7 +67,7 @@ in the default asset, which better be a Collaboration System.
 sub canAdd {
     my $class   = shift;
     my $session = shift;
-    return $session->user->isInGroup($session->asset->get('canStartThreadGroupId'));
+    return $session->asset->isa('WebGUI::Asset::Wobject::Collaboration') && $session->asset->canStartThread;
 }
 
 #-------------------------------------------------------------------
@@ -255,6 +258,33 @@ sub DESTROY {
 
 #-------------------------------------------------------------------
 
+=head2 duplicate
+
+Extends the base method to handle creating a new subscription group.
+
+=cut
+
+sub duplicate {
+    my $self       = shift;
+    my $session    = $self->session;
+    my $copy       = $self->SUPER::duplicate(@_);
+    my $key        = 'subscriptionGroupId';
+    my $oldGroupId = $self->get($key);
+
+    if ($oldGroupId) {
+        $copy->update({ $key => '' });
+        $copy->createSubscriptionGroup();
+        if (my $oldGroup = WebGUI::Group->new($session, $oldGroupId)) {
+            my $newGroup = WebGUI::Group->new($session, $copy->get($key));
+            $newGroup->addUsers($oldGroup->getUsers('withoutExpired'));
+            $newGroup->addGroups($oldGroup->getGroupsIn);
+        }
+    }
+    return $copy;
+}
+
+#-------------------------------------------------------------------
+
 =head2 getAdjacentThread ( )
 
 Given a field and an order, returns the nearest thread when sorting by those.
@@ -338,6 +368,77 @@ sub getAutoCommitWorkflowId {
 
 #-------------------------------------------------------------------
 
+=head2 getCSLinkUrl ( )
+
+This URL links to the page of the CS containing this thread, similar
+to the getThreadLink for the Post.  It does not contain the gateway
+for the site.
+
+=cut
+
+sub getCSLinkUrl {
+    my $self    = shift;
+    if ($self->get('status') eq 'archived') {
+        return $self->get('url');
+    }
+    my $session = $self->session;
+    my $url;
+    my $cs         = $self->getParent;
+    my $page_size  = $cs->get('threadsPerPage');
+    my $sql        =<<EOSQL;
+select lineage from asset
+left join Thread    using (assetId)
+left join assetData using (assetId)
+ where parentId=?
+   and className='WebGUI::Asset::Post::Thread'
+   and state='published'
+   and status='approved'
+   group by assetData.assetId
+   order by Thread.isSticky DESC,
+            lineage         DESC
+EOSQL
+
+    my $sth     = $session->db->read($sql, [$cs->getId]);
+    my $place   = 1;  ##1 based indexing
+    my $found   = 0;
+    my $lineage = $self->get('lineage');
+    THREAD: while (my $arrayRef = $sth->arrayRef) {
+        if ($arrayRef->[0] eq $lineage) {
+            $found = 1;
+            last THREAD;
+        }
+        ++$place;
+    }
+    $sth->finish;
+    return $self->get('url') if !$found;
+    my $page  = ceil($place/$page_size);
+    my $page_frag  = 'pn='.$page.';sortBy=lineage;sortOrder=desc';
+    $url = $session->url->append($cs->get('url'), $page_frag);
+    return $url;
+}
+
+#-------------------------------------------------------------------
+
+=head2 getThreadLinkUrl ( )
+
+Extend the base method from Post to remove the pagination query fragment
+
+=cut
+
+sub getThreadLinkUrl {
+	my $self = shift;
+    my $url = $self->SUPER::getThreadLinkUrl();
+    $url =~ s/\?pn=\d+//;
+    if ($url =~ m{;revision=\d+}) {
+        $url =~ s/;revision/?revision/;
+    }
+
+    return $url;
+}
+
+
+#-------------------------------------------------------------------
+
 =head2 getLastPost 
 
 Fetches the last post in this thread, otherwise, returns itself.
@@ -418,7 +519,7 @@ Returns a list of the post objects in this thread, including the thread post its
 
 sub getPosts {
     my $self = shift;
-    $self->getLineage(["self","descendants"], {
+    return $self->getLineage(["self","descendants"], {
         returnObjects       => 1,
         includeArchived     => 1,
         includeOnlyClasses  => ["WebGUI::Asset::Post","WebGUI::Asset::Post::Thread"],
@@ -947,18 +1048,22 @@ sub unstick {
 
 #-------------------------------------------------------------------
 
-=head2 unsubscribe (  )
+=head2 unsubscribe ( [$user] )
 
-Negates the subscribe method.
+Unsubscribes a user from this thread.
+
+=head3 $user
+
+An optional user object to unsubscribe.  If the object isn't passed, then it uses the session user.
 
 =cut
 
 sub unsubscribe {
-    my $self = shift;
+    my $self  = shift;
+    my $user  = shift || $self->session->user;
     my $group = WebGUI::Group->new($self->session,$self->get("subscriptionGroupId"));
-    return
-        if !$group;
-    $group->deleteUsers([$self->session->user->userId]);
+    return unless $group;
+    $group->deleteUsers([$user->userId]);
 }
 
 
@@ -1307,16 +1412,60 @@ sub www_unstick {
 
 #-------------------------------------------------------------------
 
-=head2 www_unsubscribe ( )
+=head2 www_unsubscribe ( [$message] )
 
 The web method to unsubscribe from a thread.
+
+=head3 $message
+
+An error message to display to the user.
 
 =cut
 
 sub www_unsubscribe {
-	my $self = shift;
-	$self->unsubscribe if $self->canSubscribe;
-	return $self->www_view;
+    my $self    = shift;
+    my $message = shift;
+    if($self->canSubscribe){
+        $self->unsubscribe;
+        return $self->www_view;
+    }
+    else {
+        my $session = $self->session;
+        my $i18n    = WebGUI::International->new($session, 'Asset_Collaboration');
+        my $var     = $self->get();
+        $var->{title}       = $self->getTitle;
+        $var->{url}         = $self->getUrl;
+        $var->{formHeader}  = WebGUI::Form::formHeader($session)
+                            . WebGUI::Form::hidden($session, { name => 'func', value => 'unsubscribeConfirm', }, ),
+        $var->{formFooter}  = WebGUI::Form::formFooter($session),
+        $var->{formSubmit}  = WebGUI::Form::submit($session, { value => $i18n->get('unsubscribe'), }),
+        $var->{formEmail}   = WebGUI::Form::email($session, { name => 'userEmail', value => $session->form->process('userEmail'), }),
+        $var->{formMessage} = $message;
+        return $self->getParent->processStyle($self->processTemplate($var, $self->getParent->get("unsubscribeTemplateId")));
+    } 
+}
+
+#-------------------------------------------------------------------
+
+=head2 www_unsubscribeConfirm (  )
+
+Process the unsubscribe form.
+
+=cut
+
+sub www_unsubscribeConfirm {
+    my $self    = shift;
+    my $session = $self->session;
+    return $self->www_view unless $session->form->validToken;
+    my $email   = $session->form->process('userEmail', 'email');
+    return $self->www_view unless $email;
+    my $user = WebGUI::User->newByEmail($session, $email);
+    my $i18n = WebGUI::International->new($session, 'Asset_Collaboration');
+    if (! $user) {
+        return $self->www_unsubscribe($i18n->get('no user email error message'));
+    }
+    $self->unsubscribe($user);
+    return $self->www_unsubscribe($i18n->get('You have been unsubscribed'));
 }
 
 #-------------------------------------------------------------------
@@ -1328,20 +1477,21 @@ Renders self->view based upon current style, subject to timeouts. Returns Privil
 =cut
 
 sub www_view {
-        my $self = shift;
-	my $currentPost = shift;
-	return $self->session->privilege->noAccess() unless $self->canView;
-	my $check = $self->checkView;
-	return $check if (defined $check);
-	$self->session->http->setCacheControl($self->get("visitorCacheTimeout")) if ($self->session->user->isVisitor);
-        $self->session->http->sendHeader;    
-        $self->prepareView;
-        my $style = $self->getParent->processStyle($self->getSeparator);
-        my ($head, $foot) = split($self->getSeparator,$style);
-        $self->session->output->print($head,1);
-        $self->session->output->print($self->view($currentPost));
-        $self->session->output->print($foot,1);
-        return "chunked";
+    my $self = shift;
+    my $currentPost = shift;
+    return $self->session->privilege->noAccess() unless $self->canView;
+    my $check = $self->checkView;
+    return $check if (defined $check);
+    my $cs = $self->getParent;
+    $self->session->http->setCacheControl($cs->get("visitorCacheTimeout")) if ($self->session->user->isVisitor);
+    $self->session->http->sendHeader;    
+    $self->prepareView;
+    my $style = $cs->processStyle($self->getSeparator);
+    my ($head, $foot) = split($self->getSeparator,$style);
+    $self->session->output->print($head,1);
+    $self->session->output->print($self->view($currentPost));
+    $self->session->output->print($foot,1);
+    return "chunked";
 }
 
 

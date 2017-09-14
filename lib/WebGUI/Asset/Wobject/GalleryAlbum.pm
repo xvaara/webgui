@@ -11,18 +11,25 @@ package WebGUI::Asset::Wobject::GalleryAlbum;
 #-------------------------------------------------------------------
 
 use strict;
-use Class::C3;
 use base qw(WebGUI::AssetAspect::RssFeed WebGUI::Asset::Wobject);
+
+
+use Class::C3;
 use Carp qw( croak );
 use File::Find;
 use File::Spec;
 use File::Temp qw{ tempdir };
+use Image::ExifTool qw( :Public );
+use JSON;
 use Tie::IxHash;
+
 use WebGUI::International;
 use WebGUI::Utility;
 use WebGUI::HTML;
 use WebGUI::ProgressBar;
+use WebGUI::Storage;
 
+# Do not move this instruction!
 use Archive::Any;
 
 =head1 NAME
@@ -34,6 +41,8 @@ use Archive::Any;
 =head1 DIAGNOSTICS
 
 =head1 METHODS
+
+=cut
 
 #-------------------------------------------------------------------
 
@@ -104,6 +113,12 @@ The name of the file archive to import.
 
 A base set of properties to add to each file in the archive.
 
+=head3 sortBy
+
+Order in which files should be added to the gallery album. Legal values are 
+'name', 'date' and 'fileOrder'. If missing or invalid, files will be added as 
+ordered in the archive (default; corresponding to 'fileOrder').
+
 =head3 $outputSub
 
 A callback to use for outputting data, most likely to a progress bar.  It expects the
@@ -116,8 +131,10 @@ sub addArchive {
     my $self        = shift;
     my $filename    = shift;
     my $properties  = shift;
+    my $sortBy      = shift;
     my $outputSub   = shift || sub {};
     my $gallery     = $self->getParent;
+    my $session     = $self->session;
     
     my $archive     = Archive::Any->new( $filename );
 
@@ -129,11 +146,35 @@ sub addArchive {
     $archive->extract( $tempdirName );
 
     # Get all the files in the archive
-    my @files;
-    my $wanted      = sub { push @files, $File::Find::name; $outputSub->('Found file: %s', $File::Find::name); };
-    find( {
-        wanted      => $wanted,
-    }, $tempdirName );
+    $outputSub->('Getting list of files for sorting purposes');
+    my @files = map { File::Spec->catfile($tempdirName, $_); } $archive->files;
+
+    # Sort files by date
+    if ($sortBy eq 'date') {              
+        # Hash for storing last modified timestamps
+        my %mtimes;        
+    
+        my $exifTool = Image::ExifTool->new;
+        # Make ExifTool return epoch timestamps
+        $exifTool->Options('DateFormat', '%s');
+
+        # Iterate through all files
+        foreach my $file (@files) {            
+            # Extract exif data from image
+            $exifTool->ExtractInfo( $file );
+            # Get last modified timestamp from exif data
+            $mtimes{$file} = $exifTool->GetValue('ModifyDate');
+            # Use last modified date of file as fallback
+            $mtimes{$file} = (stat($file))[9] unless $mtimes{$file};
+        }
+        
+        # Sort files based on last modified timestamps
+        @files = sort { $mtimes{$a} <=> $mtimes{$b} } @files;
+    } 
+    # Sort files by name
+    elsif ($sortBy eq 'name') {
+        @files = sort @files;
+    }
 
     for my $filePath (@files) {
         my ($volume, $directory, $filename) = File::Spec->splitpath( $filePath );
@@ -143,7 +184,7 @@ sub addArchive {
         my $class       = $gallery->getAssetClassForFile( $filePath );
         next unless $class; # class is undef for those files the Gallery can't handle
 
-        $self->session->errorHandler->info( "Adding $filename to album!" );
+        $session->errorHandler->info( "Adding $filename to album!" );
         $outputSub->('Adding %s to album', $filename);
         # Remove the file extension
         $filename   =~ s{\.[^.]+}{};
@@ -151,13 +192,14 @@ sub addArchive {
         $properties->{ className        } = $class;
         $properties->{ menuTitle        } = $filename;
         $properties->{ title            } = $filename;
-        $properties->{ url              } = $self->session->url->urlize( $self->getUrl . "/" . $filename );
+        $properties->{ ownerUserId      } = $session->user->userId;
+        $properties->{ url              } = $session->url->urlize( $self->getUrl . "/" . $filename );
 
         my $asset   = $self->addChild( $properties, undef, undef, { skipAutoCommitWorkflows => 1 } );
         $asset->setFile( $filePath );
     }
 
-    my $versionTag      = WebGUI::VersionTag->getWorking( $self->session );
+    my $versionTag      = WebGUI::VersionTag->getWorking( $session );
     $versionTag->set({ 
         "workflowId" => $self->getParent->get("workflowIdCommit"),
     });
@@ -165,37 +207,6 @@ sub addArchive {
     $versionTag->requestCommit;
 
     return undef;
-}
-
-#----------------------------------------------------------------------------
-
-=head2 addChild ( properties [, ... ] )
-
-Add a child to this GalleryAlbum. See C<WebGUI::AssetLineage> for more info.
-
-Override to ensure only appropriate classes get added to GalleryAlbums.
-
-=cut
-
-sub addChild {
-    my $self        = shift;
-    my $properties  = shift;
-    my $fileClass   = 'WebGUI::Asset::File::GalleryFile';
-    
-    # Load the class
-    WebGUI::Pluggable::load( $properties->{className} );
-
-    # Make sure we only add appropriate child classes
-    if ( !$properties->{className}->isa( $fileClass ) 
-        && !$properties->{ className }->isa( "WebGUI::Asset::Shortcut" ) 
-        ) {
-        $self->session->errorHandler->security(
-            "add a ".$properties->{className}." to a ".$self->get("className")
-        );
-        return undef;
-    }
-
-    return $self->next::method( $properties, @_ );
 }
 
 #----------------------------------------------------------------------------
@@ -216,8 +227,9 @@ sub appendTemplateVarsFileLoop {
     my $assetIds    = shift;
     my $session     = $self->session;
 
-    for my $assetId (@$assetIds) {
+    ASSET: for my $assetId (@$assetIds) {
         my $asset = WebGUI::Asset->newByDynamicClass($session, $assetId);
+        next ASSET unless $asset;
         # Set the parent
         $asset->{_parent} = $self;
         push @{$var->{file_loop}}, $asset->getTemplateVars;
@@ -306,16 +318,12 @@ sub canEdit {
     my $form        = $self->session->form;
 
     # Handle adding a photo
-    if ( $form->get("func") eq "add" ) {
-        return $self->canAddFile;
-    }
-    elsif ( $form->get("func") eq "editSave" && $form->get("className") eq __PACKAGE__ ) {
+    if ( $form->get("func") eq "add" || $form->get("func") eq "editSave" ) {
         return $self->canAddFile;
     }
     else {
         return 1 if $userId eq $self->get("ownerUserId");
-            
-        return $gallery->canEdit($userId);
+        return $gallery && $gallery->canEdit($userId);
     }
 }
 
@@ -460,6 +468,58 @@ sub getFileIds {
     }
 
     return $self->session->stow->get( "fileIds-" . $self->getId );
+}
+
+#----------------------------------------------------------------------------
+
+=head2 getNextFileId ( fileId )
+
+Gets the next fileId from the list of fileIds. C<fileId> is the base 
+fileId we want to find the next file for.
+
+Returns C<undef> if there is no next fileId.
+
+=cut
+
+sub getNextFileId {
+    my $self       = shift;
+    my $fileId     = shift;
+    my $allFileIds = $self->getFileIds;
+
+    while ( my $checkId = shift @{ $allFileIds } ) {
+        # If this is the last albumId
+        return undef unless @{ $allFileIds };
+
+        if ( $fileId eq $checkId ) {
+            return shift @{ $allFileIds };
+        }
+    }
+}
+
+#----------------------------------------------------------------------------
+
+=head2 getPreviousFileId ( fileId )
+
+Gets the previous fileId from the list of fileIds. C<fileId> is the base 
+fileId we want to find the previous file for.
+
+Returns C<undef> if there is no previous fileId.
+
+=cut
+
+sub getPreviousFileId {
+    my $self       = shift;
+    my $fileId     = shift;
+    my $allFileIds = $self->getFileIds; 
+
+    while ( my $checkId = pop @{ $allFileIds } ) {
+        # If this is the last albumId
+        return undef unless @{ $allFileIds };
+
+        if ( $fileId eq $checkId ) {
+            return pop @{ $allFileIds };
+        }
+    }
 }
 
 #----------------------------------------------------------------------------
@@ -942,6 +1002,7 @@ sub www_addArchive {
     $var->{ form_start      } 
         = WebGUI::Form::formHeader( $session, {
             action          => $self->getUrl('func=addArchiveSave'),
+            name            => 'name="galleryAlbumAddArchive"',
         });
     $var->{ form_end        }
         = WebGUI::Form::formFooter( $session );
@@ -964,11 +1025,28 @@ sub www_addArchive {
             name            => "keywords",
             value           => ( $form->get("keywords") ),
         });
+        
+    $var->{ form_location   }
+        = WebGUI::Form::Text( $session, {
+            name            => "location",
+            value           => ( $form->get("location") ),
+        });        
 
     $var->{ form_friendsOnly }
         = WebGUI::Form::yesNo( $session, {
             name            => "friendsOnly",
             value           => ( $form->get("friendsOnly") ),
+        });
+        
+    $var->{ form_sortBy     }
+        = WebGUI::Form::RadioList( $session, {
+            name            => "sortBy",
+            value           => [ "name" ],
+            options         => {
+                name            => $i18n->get("addArchive sortBy name", 'Asset_GalleryAlbum'),                
+                date            => $i18n->get("addArchive sortBy date", 'Asset_GalleryAlbum'),
+                fileOrder       => $i18n->get("addArchive sortBy fileOrder", 'Asset_GalleryAlbum'),
+            },
         });
 
     return $self->processStyle(
@@ -987,26 +1065,39 @@ Process the form for adding an archive.
 sub www_addArchiveSave {
     my $self        = shift;
 
+    # Return error message if the user viewing does not have permission to add files
     return $self->session->privilege->insufficient unless $self->canAddFile;
 
     my $session     = $self->session;
     my $form        = $self->session->form;
     my $i18n        = WebGUI::International->new( $session, 'Asset_GalleryAlbum' );
     my $pb          = WebGUI::ProgressBar->new($session);
+
+    # Retrieve properties and sort order from form variables
     my $properties  = {
         keywords        => $form->get("keywords"),
+        location        => $form->get("location"),
         friendsOnly     => $form->get("friendsOnly"),
     };
+    my $sortBy = $form->get("sortBy");
     
+    # Create progress bar to keep the connection alive
     $pb->start($i18n->get('Uploading archive'), $session->url->extras('adminConsole/assets.gif'));
+    
+    # Retrieve storage containing the uploaded archive
     my $storageId   = $form->get("archive", "File");
     my $storage     = WebGUI::Storage->get( $session, $storageId );
     if (!$storage) {
         return $pb->finish($self->getUrl('func=addArchive;error='.$i18n->get('addArchive error too big')));
     }
-    my $filename    = $storage->getPath( $storage->getFiles->[0] );
 
-    eval { $self->addArchive( $filename, $properties, sub{ $pb->update(sprintf $i18n->get(shift), @_); }); };
+    # Get the full path to the archive
+    my $filename    = $storage->getPath( $storage->getFiles->[0] );
+    
+    # Try to add files in archive as photos
+    eval { $self->addArchive( $filename, $properties, $sortBy, sub{ $pb->update(sprintf $i18n->get(shift), @_); }); };
+    
+    # Delete storage containing archive
     $storage->delete;
     if ( my $error = $@ ) {
         return $pb->finish($self->getUrl('func=addArchive;error='.sprintf $i18n->get('addArchive error generic'), $error ));
@@ -1154,6 +1245,172 @@ sub www_deleteConfirm {
 
 #----------------------------------------------------------------------------
 
+=head2 www_ajax ( )
+
+Generic AJAX service for gallery. 
+
+Arguments are accepted in JSON format in the form variable C<args>. The single
+obligatory argument is C<action> determining the service to be called. A list
+of available services is given in the following. Additional arguments may be
+required depending on the service.
+
+Results are returned in JSON format. The information returned depends on the 
+service called. Generally, success is indicated by a value of 0 in C<err>.
+
+=head3 moveFile
+
+Service for changing the rank of files. Accepts the asset Id of the photo to be moved
+in C<target>. The asset Id of the photo to be replaced is specified in C<before>
+or C<after> depending on the desired order. Returns -1 in C<err> and an error
+message in C<errMessage> if moving of the photo failed.
+
+=cut
+
+sub www_ajax {
+    my $self        = shift;
+    my $session     = $self->session;
+    my $form        = $self->session->form;
+    my $result;
+
+    # Get arguments encoded in json format
+    my $args = decode_json($form->get("args"));
+    
+    # Log some debug information
+    $session->log->debug("Ajax service called with args=" . $form->get("args"));
+    
+    # Process requests depending on action argument
+    SWITCH: {
+
+        # Return if no action was specified
+        if ( $args->{action} eq '' ) {
+            $session->log->error("Call of ajax service without action argument.");            
+            $result->{ errMessage } = "Action argument is missing.";
+            last;
+        }
+                
+        # ----- Move file action -----
+        $args->{action} eq 'moveFile' && do { $result = $self->_moveFileAjaxRequest( $args ); last; };
+                    
+        # ----- Unkown action -----
+        $session->log->error("Call of ajax service with unknown action '" . $args->{action} . "'.");
+        $result->{ errMessage } = "Action '" . $args->{action} ."' is unknown.";
+    }
+    
+    # Set error flag if error message exists
+    $result->{ err } = -1 if $result->{ errMessage };
+    
+    # Return results encoded in json format
+    return encode_json( $result );
+}
+
+
+#----------------------------------------------------------------------------
+
+=head2 _moveFileAjaxRequest ( args )
+
+AJAX service for changing the rank of single files. Returns a hash ref with
+error information. Arguments passed to the ajax service are provided via the 
+hash ref C<args>. Note that this is a private function owned by www_ajax. It 
+should not be used directly.
+
+=cut
+
+sub _moveFileAjaxRequest {
+    my $self        = shift;
+    my $args        = shift;
+    
+    my $session     = $self->session; 
+    my %result;
+            
+    # Return if current user is not allowed to edit this album
+    unless ( $self->canEdit ) {
+        $session->log->error("Call of moveFile action without having edit permission.");
+        $result{ errMessage } = "You do not have permission to move files.";
+        return \%result;
+    }            
+    # Return if no target was specified
+    if ( $args->{target} eq '') {
+        $session->log->error("Call of moveFile action without target argument.");
+        $result{ errMessage } = "Target argument is missing.";
+        return \%result;
+    }
+    # Return if before or after argument is missing
+    unless( $args->{before} or $args->{after} ) {
+        $session->log->error("Call of moveFile action without before/after argument.");
+        $result{ errMessage } = "Before/after argument is missing.";
+        return \%result;
+    }            
+    # Return if before and after arguments were specified
+    unless( $args->{before} xor $args->{after} ) {
+        $session->log->error("Call of moveFile action with before *and* after argument.");
+        $result{ errMessage } = "Both, before and after arguments were specified.";
+        return \%result;
+    }
+
+    # Get Id of target photo and instantiate asset
+    my $targetId = $args->{target};
+    my $target = WebGUI::Asset->newByDynamicClass( $session, $targetId );
+
+    # Return if target photo could not be instantiated
+    unless ( $target ) {
+        $session->log->error("Couldn't move file '$targetId' because we couldn't instantiate it.");
+        $result{ errMessage } = "ID of target file seems to be invalid.";
+        return \%result;
+    }
+    # Return if target is not a child of the current album
+    unless ( $target->getParent->getId eq $self->getId ) {
+        $session->log->error("Couldn't move file '$targetId' because it is not a child of this album.");
+        $result{ errMessage } = "ID of target file seems to be invalid.";
+        return \%result;
+    }               
+
+    my ($destId, $dest);
+
+    # Instantiate file with ID in before/after argument
+    $destId = $args->{before} ? $args->{before} : $args->{after};            
+    $dest = WebGUI::Asset->newByDynamicClass( $session, $destId );
+
+    # Return if destination file could not be instantiated
+    unless ( $dest ) {
+        $session->log->error("Couldn't move file '$targetId' before/after file '$destId' because we couldn't instantiate the latter.");
+        $result{ errMessage } = "ID in before/after argument seems to be invalid.";
+        return \%result;
+    }               
+    # Return if destination file is not a child of the current album
+    unless ( $dest->getParent->getId eq $self->getId ) {
+        $session->log->error("Couldn't move file '$targetId' before/after file '$destId' because the latter is not a child of the same album.");
+        $result{ errMessage } = "ID in before/after argument seems to be invalid.";
+        return \%result;
+    }               
+
+    # Check for use of after argument when lowering the rank
+    if ( $args->{after} && $target->getRank() > $dest->getRank() ) {
+        # Get ID of next sibling
+        $destId = $self->getNextFileId( $destId );
+        # Instantiate next sibling
+        $dest = WebGUI::Asset->newByDynamicClass( $session, $destId );
+    }
+    # Check for use of before argument when increasing the rank
+    if ( $args->{before} && $target->getRank() < $dest->getRank() ) {
+        # Get ID of previous sibling
+        $destId = $self->getPreviousFileId( $destId );
+        # Instantiate previous sibling
+        $dest = WebGUI::Asset->newByDynamicClass( $session, $destId );
+    }
+    
+    # Update rank of target photo
+    $target->setRank( $dest->getRank );
+    
+    # Log some debug information
+    $session->log->debug("Successfully moved file '$targetId' before/after file '$destId'.");
+    
+    # Return reporting success
+    $result{ err } = 0;        
+    return \%result;
+}
+
+#----------------------------------------------------------------------------
+
 =head2 www_edit ( )
 
 Show the form to add / edit a GalleryAlbum asset.
@@ -1207,6 +1464,43 @@ sub www_edit {
             $session->errorHandler->error("Couldn't demote asset '$assetId' because we couldn't instantiate it.");
         }
     }
+    # Rotate to the left
+    elsif ( grep { $_ =~ /^rotateLeft-(.{22})$/ } $form->param ) {
+        my $assetId     = ( grep { $_ =~ /^rotateLeft-(.{22})$/ } $form->param )[0];
+        $assetId        =~ s/^rotateLeft-//;              
+        my $asset       = WebGUI::Asset->newByDynamicClass( $session, $assetId );
+        
+        if ( $asset ) {
+            # Add revision and create a new version tag by doing so
+            my $newRevision = $asset->addRevision;
+            # Rotate photo (i.e. all attached image files) by 90° CCW
+            $newRevision->rotate(-90);           
+            # Auto-commit version tag 
+            $newRevision->requestAutoCommit;
+       }
+        else {
+            $session->log->error("Couldn't rotate asset '$assetId' because we couldn't instantiate it.");
+        }        
+    }
+    # Rotate to the right
+    elsif ( grep { $_ =~ /^rotateRight-(.{22})$/ } $form->param ) {
+        my $assetId     = ( grep { $_ =~ /^rotateRight-(.{22})$/ } $form->param )[0];
+        $assetId        =~ s/^rotateRight-//;                
+        my $asset       = WebGUI::Asset->newByDynamicClass( $session, $assetId );
+
+        if ( $asset ) {
+            # Add revision and create a new version tag by doing so
+            my $newRevision = $asset->addRevision;
+            # Rotate photo (i.e. all attached image files) by 90° CW
+            $newRevision->rotate(90);           
+            # Auto-commit version tag 
+            $newRevision->requestAutoCommit;
+        }
+        else {
+            $session->log->error("Couldn't rotate asset '$assetId' because we couldn't instantiate it.");
+        }        
+    }
+    # Delete the file
     elsif ( grep { $_ =~ /^delete-(.{22})$/ } $form->param ) {
         my $assetId     = ( grep { $_ =~ /^delete-(.{22})$/ } $form->param )[0];
         $assetId        =~ s/^delete-//;
@@ -1226,6 +1520,7 @@ sub www_edit {
         $var->{ form_start  } 
             = WebGUI::Form::formHeader( $session, {
                 action      => $self->getParent->getUrl('func=editSave;assetId=new;class='.__PACKAGE__),
+                extras      => 'name="galleryAlbumAdd"',
             })
             . WebGUI::Form::hidden( $session, {
                 name        => "ownerUserId",
@@ -1244,6 +1539,7 @@ sub www_edit {
         $var->{ form_start  } 
             = WebGUI::Form::formHeader( $session, {
                 action      => $self->getUrl('func=edit'),
+                extras      => 'name="galleryAlbumEdit"',
             })
             . WebGUI::Form::hidden( $session, {
                 name        => "ownerUserId",
@@ -1305,23 +1601,44 @@ sub www_edit {
                 id          => "assetIdThumbnail_$file->{ assetId }",
             } );
 
-        # Raw HTML here to provide proper value for the image
         my $promoteLabel    = $i18n->get( 'Move Up', 'Icon' );
         $file->{ form_promote }
-            = qq{<input type="submit" name="promote-$file->{assetId}" class="promote" value="$promoteLabel" />}
-            ;
+            = WebGUI::Form::submit( $session, {
+                name        => "promote-$file->{assetId}",
+                value       => $i18n->get( 'Move Up', 'Icon' ),
+                class       => "promote",
+            });
 
         my $demoteLabel     = $i18n->get( 'Move Down', 'Icon' );
         $file->{ form_demote }
-            = qq{<input type="submit" name="demote-$file->{assetId}" class="demote" value="$demoteLabel" />}
-            ;
+            = WebGUI::Form::submit( $session, {
+                name        => "demote-$file->{assetId}",
+                value       => $i18n->get( 'Move Down', 'Icon' ),
+                class       => "demote",
+            });
 
         my $deleteConfirm   = $i18n->get( 'template delete message', 'Asset_Photo' );
-        my $deleteLabel     = $i18n->get( 'Delete', 'Icon' );
         $file->{ form_delete }
-            = qq{<input type="submit" name="delete-$file->{assetId}" class="delete" value="$deleteLabel" }
-            . qq{ onclick="return confirm('$deleteConfirm')" />}
-            ;
+            = WebGUI::Form::submit( $session, {
+                name        => "delete-$file->{assetId}",
+                value       => $i18n->get( 'Delete', 'Icon' ),
+                class       => "delete",
+                extras      => "onclick=\"return confirm('$deleteConfirm')\"",
+            });
+            
+        $file->{ form_rotateLeft }
+            = WebGUI::Form::submit( $session, {
+                name        => "rotateLeft-$file->{assetId}",
+                value       => $i18n->get( 'rotate left' ),
+                class       => "rotateLeft",
+            });
+               
+        $file->{ form_rotateRight } 
+            = WebGUI::Form::submit( $session, {
+                name        => "rotateRight-$file->{assetId}",
+                value       => $i18n->get( 'rotate right' ),
+                class       => "rotateRight",
+            });
 
         $file->{ form_synopsis }
             = WebGUI::Form::HTMLArea( $session, {

@@ -57,8 +57,12 @@ ok(! $search->_isStopword('private.+'),      '_isStopword: regex metacharacters 
 # Chinese ideograph handling
 #
 ################################################
-{
+SKIP: {
     use utf8;
+
+    my $min_word_length = $session->db->quickHashRef("show variables like 'ft_min_word_len'");
+    skip 'MySQL minimum word length too long to support ideograms', 2
+        if $min_word_length->{Value} > 2;
 
     # Create an article to index
     my $article         = WebGUI::Asset->getImportNode( $session )->addChild( {
@@ -68,19 +72,14 @@ ok(! $search->_isStopword('private.+'),      '_isStopword: regex metacharacters 
     } );
     my $tag = WebGUI::VersionTag->getWorking( $session );
     $tag->commit;
-    WebGUI::Test->tagsToRollback($tag);
+    WebGUI::Test->addToCleanup($tag);
     WebGUI::Search::Index->create( $article );
     my $searcher = WebGUI::Search->new($session);
-    my $assetIds = $searcher->search({ keywords => "甲", })->getAssetIds;
+    my $assetIds = $searcher->search({ keywords => "Chinese", })->getAssetIds;
     cmp_deeply( $assetIds, [ $article->getId ], 'basic test for search works');
     my $searcher = WebGUI::Search->new($session);
-    my $assetIds = $searcher->search({ keywords => "Chinese", })->getAssetIds;
+    my $assetIds = $searcher->search({ keywords => "甲", })->getAssetIds;
     cmp_deeply( $assetIds, [ $article->getId ], 'ideograph search works');
 }
 
-#----------------------------------------------------------------------------
-# Cleanup
-END {
-
-}
 #vim:ft=perl

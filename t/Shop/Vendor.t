@@ -31,8 +31,7 @@ my $session         = WebGUI::Test->session;
 #----------------------------------------------------------------------------
 # Tests
 
-my $tests = 49;
-plan tests => 1 + $tests;
+plan tests => 49;
 
 #----------------------------------------------------------------------------
 # put your tests here
@@ -45,11 +44,7 @@ my $fenceUser = WebGUI::User->new($session, 'new');
 $fenceUser->username('fence');
 my $guardUser = WebGUI::User->new($session, 'new');
 $guardUser->username('guard');
-WebGUI::Test->usersToDelete($fenceUser, $guardUser);
-
-SKIP: {
-
-skip 'Unable to load module WebGUI::Shop::Vendor', $tests unless $loaded;
+WebGUI::Test->addToCleanup($fenceUser, $guardUser);
 
 $numberOfVendors = scalar @{ WebGUI::Shop::Vendor->getVendors($session) };
 
@@ -127,17 +122,17 @@ cmp_deeply(
     'create: requires a session variable',
 );
 
-my $now = WebGUI::DateTime->new($session, time);
+my $now = time();
 
 eval { $fence = WebGUI::Shop::Vendor->create($session, { userId => $fenceUser->userId, }); };
+WebGUI::Test->addToCleanup($fence);
 $e = Exception::Class->caught();
 ok(!$e, 'No exception thrown by create');
 isa_ok($vendor, 'WebGUI::Shop::Vendor', 'create returns correct type of object');
 
 ok($fence->get('dateCreated'), 'dateCreated is not null');
-my $dateCreated = WebGUI::DateTime->new($session, $fence->get('dateCreated'));
-my $deltaDC = $dateCreated - $now;
-cmp_ok( $deltaDC->seconds, '<=', 2, 'dateCreated is set properly');
+my $deltaDC = $fence->get('dateCreated') - $now;
+cmp_ok( $deltaDC, '<=', 2, 'dateCreated is set properly');
 
 #######################################################################
 #
@@ -251,6 +246,7 @@ my $defaultVendor = WebGUI::Shop::Vendor->newByUserId($session, 3);
 #######################################################################
 
 $guard = WebGUI::Shop::Vendor->create($session, { userId => $guardUser->userId, name => q|Warden Norton|});
+WebGUI::Test->addToCleanup($guard);
 my $vendorsList = WebGUI::Shop::Vendor->getVendors($session);
 cmp_deeply(
     $vendorsList,
@@ -307,11 +303,4 @@ foreach (keys %completeProps ) {
 
 undef $guard;
 
-}
-
-#----------------------------------------------------------------------------
-# Cleanup
-END {
-    $fence->delete;
-    is( scalar @{  WebGUI::Shop::Vendor->getVendors($session) }, $numberOfVendors, 'No vendors leaked');
-}
+#vim:ft=perl

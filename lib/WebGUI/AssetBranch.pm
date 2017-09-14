@@ -46,18 +46,54 @@ Duplicates this asset and the entire subtree below it.  Returns the root of the 
 
 If true, then only children, and not descendants, will be duplicated.
 
+=head3 $state
+
+Set this to "clipboard" if you want the resulting asset to be on the clipboard
+(rather than published) when we're done.
+
 =cut
 
 sub duplicateBranch {
-    my $self         = shift;
-    my $childrenOnly = shift;
+    my ($self, $childrenOnly, $state) = @_;
+    my $session   = $self->session;
+    my $log       = $session->log;
+    my $clipboard = $state && $state =~ /^clipboard/;
 
-    my $newAsset = $self->duplicate({skipAutoCommitWorkflows=>1,skipNotification=>1});
+    my $newAsset = $self->duplicate(
+        {   skipAutoCommitWorkflows => 1,
+            skipNotification        => 1,
+            state                   => $state,
+        }
+    );
+
+    # Correctly handle positions for Layout assets
     my $contentPositions = $self->get("contentPositions");
     my $assetsToHide     = $self->get("assetsToHide");
 
-    foreach my $child (@{$self->getLineage(["children"],{returnObjects=>1})}) {
-        my $newChild = $childrenOnly ? $child->duplicate({skipAutoCommitWorkflows=>1, skipNotification=>1}) : $child->duplicateBranch;
+    my $childIter = $self->getLineageIterator(["children"]);
+    while ( 1 ) {
+        my $child;
+        eval { $child = $childIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $self->session->log->error($x->full_message);
+            next;
+        }
+        last unless $child;
+        my $newChild;
+        if ($childrenOnly) {
+            $newChild = $child->duplicate(
+                {   skipAutoCommitWorkflows => 1,
+                    skipNotification        => 1,
+                    state                   => $clipboard && 'clipboard-limbo',
+                }
+            );
+        }
+        elsif($clipboard) {
+            $newChild = $child->duplicateBranch(0, 'clipboard-limbo');
+        }
+        else {
+            $newChild = $child->duplicateBranch;
+        }
         $newChild->setParent($newAsset);
         my ($oldChildId, $newChildId) = ($child->getId, $newChild->getId);
         $contentPositions =~ s/\Q${oldChildId}\E/${newChildId}/g if ($contentPositions);
@@ -317,6 +353,8 @@ sub www_editBranchSave {
     my %data;
     my $pb      = WebGUI::ProgressBar->new($session);
     my $i18n    = WebGUI::International->new($session, 'Asset');
+    $pb->start($i18n->get('edit branch'), $session->url->extras('adminConsole/assets.gif'));
+    $pb->update($i18n->get('Processing form data'));
     $data{isHidden}      = $form->yesNo("isHidden")        if ($form->yesNo("change_isHidden"));
     $data{newWindow}     = $form->yesNo("newWindow")       if ($form->yesNo("change_newWindow"));
     $data{encryptPage}   = $form->yesNo("encryptPage")     if ($form->yesNo("change_encryptPage"));
@@ -353,12 +391,18 @@ sub www_editBranchSave {
         $urlBase   = $form->text("baseUrl");
         $endOfUrl  = $form->selectBox("endOfUrl");
     }
-    $pb->start($i18n->get('edit branch'), $session->url->extras('adminConsole/assets.gif'));
-    my $descendants = $self->getLineage(["self","descendants"],{returnObjects=>1});	
-    DESCENDANT: foreach my $descendant (@{$descendants}) {
+    my $descendantIter = $self->getLineageIterator(["self","descendants"]);
+    while ( 1 ) {
+        my $descendant;
+        eval { $descendant = $descendantIter->() };
+        if ( my $x = WebGUI::Error->caught('WebGUI::Error::ObjectNotFound') ) {
+            $session->log->error($x->full_message);
+            next;
+        }
+        last unless $descendant;
         if ( !$descendant->canEdit ) {
             $pb->update(sprintf $i18n->get('skipping %s'), $descendant->getTitle);
-            next DESCENDANT;
+            next;
         }
         $pb->update(sprintf $i18n->get('editing %s'), $descendant->getTitle);
         my $url;
@@ -401,6 +445,7 @@ sub www_editBranchSave {
             }
         }
     }
+    $pb->update(sprintf $i18n->get('Attempting to commit changes'));
     if (WebGUI::VersionTag->autoCommitWorkingIfEnabled($self->session, {
         allowComments   => 1,
         returnUrl       => $self->getUrl,

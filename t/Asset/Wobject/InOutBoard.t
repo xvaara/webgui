@@ -18,7 +18,7 @@ use Test::MockObject::Extends;
 
 use WebGUI::Test;
 use WebGUI::Session;
-use Test::More tests => 8; # increment this value for each test you create
+use Test::More tests => 9; # increment this value for each test you create
 use Test::Deep;
 use Data::Dumper;
 
@@ -44,14 +44,14 @@ foreach my $name (@names) {
     $user->username($name);
     push @users, $user;
 }
-WebGUI::Test->usersToDelete(@users);
+WebGUI::Test->addToCleanup(@users);
 
 # Do our work in the import node
 my $node = WebGUI::Asset->getImportNode($session);
 
 my $versionTag = WebGUI::VersionTag->getWorking($session);
 $versionTag->set({name=>"InOutBoard Test"});
-WebGUI::Test->tagsToRollback($versionTag);
+WebGUI::Test->addToCleanup($versionTag);
 my $board = $node->addChild({
     className       => 'WebGUI::Asset::Wobject::InOutBoard',
     inOutTemplateId => $templateId,
@@ -131,6 +131,14 @@ $session->scratch->delete('userId');
 
 ################################################################
 #
+#  getStatusList
+#
+################################################################
+$board->update({statusList => "In\r\nOut\rHome\nLunch"});
+is_deeply [$board->getStatusList], [qw(In Out Home Lunch)], 'getStatusList';
+
+################################################################
+#
 #  view
 #
 ################################################################
@@ -139,17 +147,20 @@ $board->view;
 cmp_bag(
     $templateVars->{rows_loop},
     [
-        {
+        superhashof({
             deptHasChanged => ignore(),
             status         => 'In',
             dateStamp      => ignore(),
             message        => 'work time',
             username       => 'red',
-        },
-        ignore(), ignore(), ignore(), ignore(),
+        }),
+        superhashof({ username => 'Admin' }),
+        superhashof({ username => 'boggs' }),
+        superhashof({ username => 'andy' }),
+        superhashof({ username => 'hadley' }),
     ],
     'view: returns one entry for each user, entry is correct for user with status'
-);
+) or diag(Dumper $templateVars->{rows_loop});
 
 WebGUI::Test->unmockAssetId($templateId);
 ################################################################

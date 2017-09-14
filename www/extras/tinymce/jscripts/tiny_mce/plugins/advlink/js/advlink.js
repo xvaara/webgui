@@ -14,8 +14,9 @@ function preinit() {
 }
 
 function changeClass() {
-	var formObj = document.forms[0];
-	formObj.classes.value = getSelectValue(formObj, 'classlist');
+	var f = document.forms[0];
+
+	f.classes.value = getSelectValue(f, 'classlist');
 }
 
 function init() {
@@ -29,8 +30,6 @@ function init() {
 
 	document.getElementById('hrefbrowsercontainer').innerHTML = getBrowserHTML('hrefbrowser','href','file','advlink');
 	document.getElementById('popupurlbrowsercontainer').innerHTML = getBrowserHTML('popupurlbrowser','popupurl','file','advlink');
-	document.getElementById('linklisthrefcontainer').innerHTML = getLinkListHTML('linklisthref','href');
-	document.getElementById('anchorlistcontainer').innerHTML = getAnchorListHTML('anchorlist','href');
 	document.getElementById('targetlistcontainer').innerHTML = getTargetListHTML('targetlist','target');
 
 	// Link list
@@ -39,6 +38,13 @@ function init() {
 		document.getElementById("linklisthrefrow").style.display = 'none';
 	else
 		document.getElementById("linklisthrefcontainer").innerHTML = html;
+
+	// Anchor list
+	html = getAnchorListHTML('anchorlist','href');
+	if (html == "")
+		document.getElementById("anchorlistrow").style.display = 'none';
+	else
+		document.getElementById("anchorlistcontainer").innerHTML = html;
 
 	// Resize some elements
 	if (isVisible('hrefbrowser'))
@@ -115,7 +121,7 @@ function checkPrefix(n) {
 	if (n.value && Validator.isEmail(n) && !/^\s*mailto:/i.test(n.value) && confirm(tinyMCEPopup.getLang('advlink_dlg.is_email')))
 		n.value = 'mailto:' + n.value;
 
-	if (/^\s*www./i.test(n.value) && confirm(tinyMCEPopup.getLang('advlink_dlg.is_external')))
+	if (/^\s*www\./i.test(n.value) && confirm(tinyMCEPopup.getLang('advlink_dlg.is_external')))
 		n.value = 'http://' + n.value;
 }
 
@@ -234,7 +240,7 @@ function parseLink(link) {
 		regExp += "\\);?";
 
 		// Build variable array
-		var variables = new Array();
+		var variables = [];
 		variables["_function"] = fnName;
 		var variableValues = link.replace(new RegExp(regExp, "gi"), replaceStr).split('<delim>');
 		for (var i=0; i<variableNames.length; i++)
@@ -248,7 +254,7 @@ function parseLink(link) {
 
 function parseOptions(opts) {
 	if (opts == null || opts == "")
-		return new Array();
+		return [];
 
 	// Cleanup the options
 	opts = opts.toLowerCase();
@@ -256,7 +262,7 @@ function parseOptions(opts) {
 	opts = opts.replace(/[^0-9a-z=,]/g, "");
 
 	var optionChunks = opts.split(',');
-	var options = new Array();
+	var options = [];
 
 	for (var i=0; i<optionChunks.length; i++) {
 		var parts = optionChunks[i].split('=');
@@ -353,26 +359,28 @@ function setAttrib(elm, attrib, value) {
 
 	// Clean up the style
 	if (attrib == 'style')
-		value = dom.serializeStyle(dom.parseStyle(value));
+		value = dom.serializeStyle(dom.parseStyle(value), 'a');
 
 	dom.setAttrib(elm, attrib, value);
 }
 
 function getAnchorListHTML(id, target) {
-	var inst = tinyMCEPopup.editor;
-	var nodes = inst.dom.select('a.mceItemAnchor,img.mceItemAnchor'), name, i;
-	var html = "";
+	var ed = tinyMCEPopup.editor, nodes = ed.dom.select('a'), name, i, len, html = "";
 
-	html += '<select id="' + id + '" name="' + id + '" class="mceAnchorList" o2nfocus="tinyMCE.addSelectAccessibility(event, this, window);" onchange="this.form.' + target + '.value=';
-	html += 'this.options[this.selectedIndex].value;">';
-	html += '<option value="">---</option>';
-
-	for (i=0; i<nodes.length; i++) {
-		if ((name = inst.dom.getAttrib(nodes[i], "name")) != "")
+	for (i=0, len=nodes.length; i<len; i++) {
+		if ((name = ed.dom.getAttrib(nodes[i], "name")) != "")
 			html += '<option value="#' + name + '">' + name + '</option>';
 	}
 
-	html += '</select>';
+	if (html == "")
+		return "";
+
+	html = '<select id="' + id + '" name="' + id + '" class="mceAnchorList"'
+		+ ' onchange="this.form.' + target + '.value=this.options[this.selectedIndex].value"'
+		+ '>'
+		+ '<option value="">---</option>'
+		+ html
+		+ '</select>';
 
 	return html;
 }
@@ -388,7 +396,6 @@ function insertAction() {
 
 	// Remove element if there is no href
 	if (!document.forms[0].href.value) {
-		tinyMCEPopup.execCommand("mceBeginUndoLevel");
 		i = inst.selection.getBookmark();
 		inst.dom.remove(elm, 1);
 		inst.selection.moveToBookmark(i);
@@ -397,50 +404,24 @@ function insertAction() {
 		return;
 	}
 
-	tinyMCEPopup.execCommand("mceBeginUndoLevel");
-
 	// Create new anchor elements
 	if (elm == null) {
-		tinyMCEPopup.execCommand("CreateLink", false, "#mce_temp_url#", {skip_undo : 1});
+		inst.getDoc().execCommand("unlink", false, null);
+		tinyMCEPopup.execCommand("mceInsertLink", false, "#mce_temp_url#", {skip_undo : 1});
 
 		elementArray = tinymce.grep(inst.dom.select("a"), function(n) {return inst.dom.getAttrib(n, 'href') == '#mce_temp_url#';});
-		for (i=0; i<elementArray.length; i++) {
-			elm = elementArray[i];
-
-			// Move cursor to end
-			try {
-				tinyMCEPopup.editor.selection.collapse(false);
-			} catch (ex) {
-				// Ignore
-			}
-
-			// Move cursor behind the new anchor
-			// Don't remember why this was needed so it's now removed
-			/*
-			if (tinyMCE.isGecko) {
-				var sp = inst.getDoc().createTextNode(" ");
-
-				if (elm.nextSibling)
-					elm.parentNode.insertBefore(sp, elm.nextSibling);
-				else
-					elm.parentNode.appendChild(sp);
-
-				// Set range after link
-				var rng = inst.getDoc().createRange();
-				rng.setStartAfter(elm);
-				rng.setEndAfter(elm);
-
-				// Update selection
-				var sel = inst.getSel();
-				sel.removeAllRanges();
-				sel.addRange(rng);
-			}
-			*/
-
-			setAllAttribs(elm);
-		}
+		for (i=0; i<elementArray.length; i++)
+			setAllAttribs(elm = elementArray[i]);
 	} else
 		setAllAttribs(elm);
+
+	// Don't move caret if selection was image
+	if (elm.childNodes.length != 1 || elm.firstChild.nodeName != 'IMG') {
+		inst.focus();
+		inst.selection.select(elm);
+		inst.selection.collapse(0);
+		tinyMCEPopup.storeSelection();
+	}
 
 	tinyMCEPopup.execCommand("mceEndUndoLevel");
 	tinyMCEPopup.close();
@@ -448,11 +429,10 @@ function insertAction() {
 
 function setAllAttribs(elm) {
 	var formObj = document.forms[0];
-	var href = formObj.href.value;
+	var href = formObj.href.value.replace(/ /g, '%20');
 	var target = getSelectValue(formObj, 'targetlist');
 
 	setAttrib(elm, 'href', href);
-	setAttrib(elm, 'mce_href', href);
 	setAttrib(elm, 'title');
 	setAttrib(elm, 'target', target == '_self' ? '' : target);
 	setAttrib(elm, 'id');
@@ -488,7 +468,7 @@ function setAllAttribs(elm) {
 function getSelectValue(form_obj, field_name) {
 	var elm = form_obj.elements[field_name];
 
-	if (elm == null || elm.options == null)
+	if (!elm || elm.options == null || elm.selectedIndex == -1)
 		return "";
 
 	return elm.options[elm.selectedIndex].value;

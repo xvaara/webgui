@@ -63,6 +63,7 @@ sub definition {
         my $session = shift;
         my $definition = shift;
 	my $i18n = WebGUI::International->new($session,"Asset_Snippet");
+	my $t18n = WebGUI::International->new($session,'Asset_Template');
 	my %properties;
 	tie %properties, 'Tie::IxHash';
 	%properties = (
@@ -94,13 +95,14 @@ sub definition {
 				label => $i18n->get("cache timeout"),
 				hoverHelp => $i18n->get("cache timeout help")
 				},
- 			processAsTemplate=>{
-                        	fieldType=>'yesNo',
-				label=>$i18n->get('process as template'),
-				hoverHelp=>$i18n->get('process as template description'),
-				tab=>"properties",
-                                defaultValue=>0
-                                },
+			templateParser => {
+				fieldType    => 'templateParser',
+				allowNone    => 1,
+				label        => $t18n->get('parser'),
+				hoverHelp    => $t18n->get('parser description'),
+				tab          => 'properties',
+				defaultValue => '',
+			},
 			mimeType=>{
 				tab=>"properties",
 				hoverHelp=>$i18n->get('mimeType description'),
@@ -176,6 +178,30 @@ sub exportGetUrlAsPath {
 
 #-------------------------------------------------------------------
 
+=head2 getCache ( $calledAsWebMethod )
+
+Overrides the base method to handle Snippet specific caching.
+
+=head3 $calledAsWebMethod
+
+If this is true, then change the cache key.
+
+=cut
+
+sub getCache {
+	my $self              = shift;
+	my $calledAsWebMethod = shift;
+    my $session           = $self->session;
+    my $cacheKey = "view_".$calledAsWebMethod.'_'.$self->getId;
+    if ($session->env->sslRequest) {
+        $cacheKey .= '_ssl';
+    }
+    my $cache = WebGUI::Cache->new($session, $cacheKey);
+    return $cache;
+}
+
+#-------------------------------------------------------------------
+
 =head2 getToolbar ( )
 
 Returns a toolbar with a set of icons that hyperlink to functions that delete, edit, promote, demote, cut, and copy.
@@ -218,8 +244,6 @@ sub packSnippet {
 
     if ( $self->get('mimeType') eq "text/html" ) {
         HTML::Packer::minify( \$packed, {
-            remove_comments     => 1,
-            remove_newlines     => 1,
             do_javascript       => "shrink",
             do_stylesheet       => "minify",
         } );
@@ -253,6 +277,8 @@ sub purgeCache {
 
 	WebGUI::Cache->new($self->session,"view__".$self->getId)->delete;
 	WebGUI::Cache->new($self->session,"view_1_".$self->getId)->delete;	
+	WebGUI::Cache->new($self->session,"view__".$self->getId."_ssl")->delete;
+	WebGUI::Cache->new($self->session,"view_1_".$self->getId."_ssl")->delete;	
 	$self->SUPER::purgeCache();
 }
 
@@ -270,16 +296,17 @@ toolbar if in adminMode.
 =cut
 
 sub view {
-	my $self = shift;
+	my $self              = shift;
 	my $calledAsWebMethod = shift;
-    my $session = $self->session;
+    my $session    = $self->session;
     my $versionTag = WebGUI::VersionTag->getWorking($session, 1);
     my $noCache =
         $session->var->isAdminOn
         || $self->get("cacheTimeout") <= 10
         || ($versionTag && $versionTag->getId eq $self->get("tagId"));
     unless ($noCache) {
-		my $out = WebGUI::Cache->new($session,"view_".$calledAsWebMethod."_".$self->getId)->get;
+        my $cache = $self->getCache($calledAsWebMethod);
+        my $out   = $cache->get if defined $cache;
 		return $out if $out;
 	}
 	my $output = $self->get('usePacked')
@@ -287,12 +314,15 @@ sub view {
                 : $self->get('snippet')
                 ;
 	$output = $self->getToolbar.$output if ($session->var->isAdminOn && !$calledAsWebMethod);
-	if ($self->getValue("processAsTemplate")) {
-		$output = WebGUI::Asset::Template->processRaw($session, $output, $self->get);
+	if (my $parser = $self->getValue('templateParser')) {
+		$output = WebGUI::Asset::Template->processRaw(
+			$session, $output, $self->get, $parser
+		);
 	}
 	WebGUI::Macro::process($session,\$output);
     unless ($noCache) {
-		WebGUI::Cache->new($session,"view_".$calledAsWebMethod."_".$self->getId)->set($output,$self->get("cacheTimeout"));
+        my $cache = $self->getCache($calledAsWebMethod);
+		$cache->set($output,$self->get("cacheTimeout"));
 	}
     return $output;
 }

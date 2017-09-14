@@ -350,7 +350,8 @@ sub view {
 	my $self = shift;
 	if (!$self->session->var->isAdminOn && $self->get("cacheTimeout") > 10 && !$self->session->form->process("overrideTemplateId") &&
             !$self->session->form->process($self->paginateVar) && !$self->session->form->process("makePrintable")) {
-		my $out = WebGUI::Cache->new($self->session,"view_".$self->getId)->get;
+        my $cache = $self->getCache;
+        my $out   = $cache->get if defined $cache;
 		return $out if $out;
 	}
 	my %var;
@@ -368,6 +369,7 @@ sub view {
 			}
 			push(@{$var{attachment_loop}}, {
 				filename => $file,
+				extension => WebGUI::Storage->getFileExtension($file),
 				isImage => $storage->isImage($file),
 				url=> $storage->getUrl($file),
 				thumbnailUrl => $storage->getThumbnailUrl($file),

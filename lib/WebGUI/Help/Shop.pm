@@ -73,6 +73,10 @@ our $HELP = {
 						description => "quantity help",
 					},
 					{
+						name		=> "removeBox",
+						description => "removeBox help",
+					},
+					{
 						name		=> "dateAdded",
 						description => "dateAdded help",
 					},
@@ -102,31 +106,35 @@ our $HELP = {
 						description => "price help",
 					},
 					{
-						name		=> "removeButton",
-						description => "removeButton help",
-						required	=> 1,
-					},
-					{
-						name		=> "shipToButton",
-						description => "item shipToButton help",
+						name		=> "itemAddressChooser",
+						description => "itemAddressChooser help",
 					},
 					{
 						name		=> "shippingAddress",
 						description => "shippingAddress help",
 					},
 					{
-						name		=> "isCashier",
+						name		=> "taxRate",
+						description => "item taxRate help",
 					},
 					{
-						name		=> "posLookupForm",
+						name		=> "taxAmount",
+						description => "item taxAmount help",
 					},
 					{
-						name		=> "posUsername",
+						name		=> "pricePlusTax",
+						description => "item pricePlusTax help",
 					},
 					{
-						name		=> "posUserId",
+						name		=> "extendedPricePlusTax",
+						description => "item extendedPricePlusTax help",
 					},
 				],
+			},
+			{
+				name		=> "message",
+				description	=> "message help",
+				required	=> 1,
 			},
 			{
 				name		=> "error",
@@ -144,11 +152,6 @@ our $HELP = {
 				required	=> 1,
 			},
 			{
-				name		=> "checkoutButton",
-				description	=> "checkoutButton help",
-				required	=> 1,
-			},
-			{
 				name		=> "updateButton",
 				description	=> "updateButton help",
 				required	=> 1,
@@ -158,17 +161,24 @@ our $HELP = {
 				description	=> "continueShoppingButton help",
 			},
 			{
-				name		=> "chooseShippingButton",
-				description	=> "chooseShippingButton help",
-				required	=> 1,
-			},
-			{
-				name		=> "shipToButton",
-				description	=> "shipToButton help",
+				name		=> "minimumCartAmount",
+				description	=> "minimumCartAmount help",
 			},
 			{
 				name		=> "subtotalPrice",
 				description	=> "subtotalPrice help",
+			},
+			{
+				name		=> "shippingAddressChooser",
+				description	=> "shippingAddressChooser help",
+			},
+			{
+				name		=> "billingAddressChooser",
+				description	=> "billingAddressChooser help",
+			},
+			{
+				name		=> "sameShippingAsBilling",
+				description	=> "sameShippingAsBilling help",
 			},
 			{
 				name		=> "shippingPrice",
@@ -179,16 +189,24 @@ our $HELP = {
 				description	=> "tax help",
 			},
 			{
+				name		=> "userIsVisitor",
+				description	=> "userIsVisitor help",
+			},
+			{
+				name		=> "shippableItemsInCart",
+			},
+			{
 				name		=> "hasShippingAddress",
 				description	=> "hasShippingAddress help",
 			},
 			{
-				name		=> "shippingAddress",
-				description	=> "shippingAddress help",
-			},
-			{
 				name		=> "shippingOptions",
 				description	=> "shippingOptions help",
+				required	=> 1,
+			},
+			{
+				name		=> "paymentOptions",
+				description	=> "paymentOptions help",
 				required	=> 1,
 			},
 			{
@@ -203,6 +221,158 @@ our $HELP = {
 			{
 				name		=> "inShopCreditDeduction",
 				description	=> "inShopCreditDeduction help",
+			},
+            {
+                name		=> "isCashier",
+            },
+            {
+                name		=> "posLookupForm",
+            },
+            {
+                name		=> "posUsername",
+            },
+            {
+                name		=> "posUserId",
+            },
+			{
+				name		=> "loginFormHeader",
+				description	=> "loginFormHeader help",
+                required    => 1,
+			},
+			{
+				name		=> "loginFormFooter",
+				description	=> "loginFormFooter help",
+                required    => 1,
+			},
+			{
+				name		=> "loginFormUsername",
+				description	=> "loginFormUsername help",
+                required    => 1,
+			},
+			{
+				name		=> "loginFormPassword",
+				description	=> "loginFormPassword help",
+                required    => 1,
+			},
+			{
+				name		=> "loginFormButton",
+				description	=> "loginFormButton help",
+                required    => 1,
+			},
+			{
+				name		=> "registerLink",
+				description	=> "registerLink help",
+                required    => 1,
+			},
+			{
+				name		=> "billing_address1Field",
+				description	=> "address1Field help",
+				required	=> 1,
+			},
+			{
+				name		=> "billing_address2Field",
+				description	=> "address2Field help",
+				required	=> 1,
+			},
+			{
+				name		=> "billing_address3Field",
+				description	=> "address3Field help",
+				required	=> 1,
+			},
+			{
+				name		=> "billing_labelField",
+				description	=> "address labelField help",
+				required	=> 1,
+			},
+			{
+				name		=> "billing_nameField",
+				description	=> "address nameField help",
+				required	=> 1,
+			},
+			{
+				name		=> "billing_cityField",
+				description	=> "cityField help",
+				required	=> 1,
+			},
+			{
+				name		=> "billing_stateField",
+				description	=> "stateField help",
+				required	=> 1,
+			},
+			{
+				name		=> "billing_countryField",
+				description	=> "countryField help",
+				required	=> 1,
+			},
+			{
+				name		=> "billing_codeField",
+				description	=> "codeField help",
+				required	=> 1,
+			},
+			{
+				name		=> "billing_phoneNumberField",
+				description	=> "phoneNumberField help",
+				required	=> 1,
+			},
+			{
+				name		=> "billing_emailField",
+				description	=> "emailField help",
+				required	=> 1,
+			},
+			{
+				name		=> "shipping_address1Field",
+				description	=> "address1Field help",
+				required	=> 1,
+			},
+			{
+				name		=> "shipping_address2Field",
+				description	=> "address2Field help",
+				required	=> 1,
+			},
+			{
+				name		=> "shipping_address3Field",
+				description	=> "address3Field help",
+				required	=> 1,
+			},
+			{
+				name		=> "shipping_labelField",
+				description	=> "address labelField help",
+				required	=> 1,
+			},
+			{
+				name		=> "shipping_nameField",
+				description	=> "address nameField help",
+				required	=> 1,
+			},
+			{
+				name		=> "shipping_cityField",
+				description	=> "cityField help",
+				required	=> 1,
+			},
+			{
+				name		=> "shipping_stateField",
+				description	=> "stateField help",
+				required	=> 1,
+			},
+			{
+				name		=> "shipping_countryField",
+				description	=> "countryField help",
+				required	=> 1,
+			},
+			{
+				name		=> "shipping_codeField",
+				description	=> "codeField help",
+				required	=> 1,
+			},
+			{
+				name		=> "shipping_phoneNumberField",
+				description	=> "phoneNumberField help",
+				required	=> 1,
+			},
+			{
+				name		=> "shipping_emailField",
+				description	=> "emailField help",
+				required	=> 1,
 			},
 		],
 		related 	=> [  
@@ -393,6 +563,11 @@ our $HELP = {
 				description	=> "phoneNumberField help",
 				required	=> 1,
 			},
+			{
+				name		=> "emailField",
+				description	=> "emailField help",
+				required	=> 1,
+			},
 		],
 		related 	=> [  
 			{
@@ -564,6 +739,9 @@ our $HELP = {
                 variables   => [
                     {
                         name        => 'viewItemUrl',
+                    },
+                    {
+                        name        => 'hasSku',
                     },
                     {
                         name        => 'price',

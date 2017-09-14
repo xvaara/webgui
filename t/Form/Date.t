@@ -50,7 +50,7 @@ my $testBlock = [
 
 my $formType = 'date';
 
-my $numTests = 25 + scalar @{ $testBlock } ;
+my $numTests = 28 + scalar @{ $testBlock } ;
 
 
 plan tests => $numTests;
@@ -81,7 +81,7 @@ is($input->name, 'TestDate', 'Checking input name');
 is($input->type, 'text', 'Checking input type');
 is(
     $input->value,
-    WebGUI::DateTime->new($session, $defaultTime)->toMysqlDate,
+    WebGUI::DateTime->new($session, $defaultTime)->set_time_zone($session->user->get('timeZone'))->toMysqlDate,
     "Checking default value"
 );
 is($input->{size}, 10, 'Checking size param, default');
@@ -141,6 +141,14 @@ is(
     '2008-08-01',
     "toHtml: defaultValue in epoch format, returns date in mysql format"
 );
+
+$date2 = WebGUI::Form::Date->new($session, {defaultValue => '2008-008-001'});
+is(
+    getValueFromForm($session, $date2->toHtml),
+    '1970-01-01',
+    "toHtml: defaultValue in bad mysql format returns date from epoch 0"
+);
+
 $date2 = WebGUI::Form::Date->new($session, {defaultValue => -1});
 is($date2->getValueAsHtml(), '12/31/1969', "getValueAsHtml: defaultValue as negative epoch, returns in users's format");
 
@@ -152,6 +160,24 @@ is($date2->getValueAsHtml(), '8/16/2001', "getValueAsHtml: defaultValue in mysql
 
 $date2 = WebGUI::Form::Date->new($session, {defaultValue => '2008-08-01', value => '2001-08-16', });
 is($date2->getValueAsHtml(), '2001-08-16', "getValueAsHtml: defaultValue in mysql format, value as mysql returns value in mysql format");
+
+my $dutchie = WebGUI::User->create($session);
+WebGUI::Test->addToCleanup($dutchie);
+$dutchie->update({timeZone => 'Europe/Amsterdam', });
+$session->user({user => $dutchie});
+my $date_form = WebGUI::Form::Date->new($session, { name => 'test_date', });
+$session->request->setup_body({ test_date => '2001-08-16', });
+my $epochal_value = $date_form->getValue;
+
+$date_form->set(value => $epochal_value);
+my $mysql_date = getValueFromForm($session, $date_form->toHtml);
+is $mysql_date, '2001-08-16', 'Form data processed and rendered round trip';
+$session->request->setup_body({});
+
+$session->user({userId => 1, });
+my $day_form = WebGUI::Form::Date->new($session, { name => 'day_date', value=>'2001-08-16'});
+my $day16 = getValueFromForm($session, $day_form->toHtml);
+is $day16, '2001-08-16', 'day set correctly in form';
 
 sub getValueFromForm {
     my ($session, $textForm) = @_;

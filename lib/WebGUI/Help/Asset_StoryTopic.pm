@@ -29,6 +29,11 @@ our $HELP = {
                 { name => 'editIcon' },
               ],
             },
+            { name => 'topStory' },
+            { name => 'topStoryDeleteIcon',
+              description => 'deleteIcon', },
+            { name => 'topStoryEditIcon',
+              description => 'editIcon', },
             { name => 'topStoryTitle'        },
             { name => 'topStorySubtitle'     },
             { name => 'topStoryUrl'          },
@@ -42,7 +47,12 @@ our $HELP = {
             { name => 'rssUrl'               },
             { name => 'atomUrl'              },
         ],
-        related => []
+        related => [
+              {
+                  namespace => 'Asset_Story',
+                  tag       => 'view template',
+              }
+        ],
     },
 
     'storytopic asset template variables' => {

@@ -40,7 +40,7 @@ use DateTime;
 my $session         = WebGUI::Test->session;
 
 my $staff = WebGUI::Group->new($session, 'new');
-WebGUI::Test->groupsToDelete($staff);
+WebGUI::Test->addToCleanup($staff);
 $staff->name('Reporting Staff');
 
 my $reporter = WebGUI::User->new($session, 'new');
@@ -50,7 +50,7 @@ $editor->username('editor');
 my $reader   = WebGUI::User->new($session, 'new');
 $reader->username('reader');
 $staff->addUsers([$reporter->userId]);
-WebGUI::Test->usersToDelete($reporter, $editor, $reader);
+WebGUI::Test->addToCleanup($reporter, $editor, $reader);
 
 my $archive = 'placeholder for Test::Maker::Permission';
 
@@ -63,7 +63,7 @@ $canPostMaker->prepare({
     fail     => [1, $reader            ],
 });
 
-my $tests = 50
+my $tests = 56
           + $canPostMaker->plan
           ;
 plan tests => 1
@@ -94,7 +94,8 @@ $archive    = $home->addChild({
               });
 $versionTag = WebGUI::VersionTag->getWorking($session);
 $versionTag->commit;
-WebGUI::Test->tagsToRollback($versionTag);
+WebGUI::Test->addToCleanup($versionTag);
+$archive = $archive->cloneFromDb;
 
 isa_ok($archive, 'WebGUI::Asset::Wobject::StoryArchive', 'created StoryArchive');
 
@@ -131,12 +132,36 @@ my $dt = DateTime->from_epoch(epoch => $now, time_zone => $session->datetime->ge
 my $folderName = $dt->strftime('%B_%d_%Y');
 $folderName =~ s/^(\w+_)0/$1/;
 is($todayFolder->getTitle, $folderName, '... folder has the right name');
-my $folderUrl = join '/', $archive->getUrl, lc $folderName;
-is($todayFolder->getUrl, $folderUrl, '... folder has the right URL');
+my $folderUrl = $archive->getFolderUrl($folderName);
+is($todayFolder->get('url'), $folderUrl, '... folder has the right URL');
 is($todayFolder->getParent->getId, $archive->getId, '... created folder has the right parent');
 is($todayFolder->get('state'),  'published', '... created folder is published');
 is($todayFolder->get('status'), 'approved',  '... created folder is approved');
 is($todayFolder->get('styleTemplateId'), $archive->get('styleTemplateId'),  '... created folder has correct styleTemplateId');
+
+{
+    my $undo = WebGUI::Test->overrideSetting(urlExtension => 'ext');
+    my $arch2 = $home->addChild({
+        className => $class,
+        title     => 'Extension Tester',
+    });
+    addToCleanup($arch2);
+
+    is $arch2->get('url'),
+        'home/extension-tester.ext',
+        'ext added';
+
+    is $arch2->getFolderUrl('blah'),
+        'home/extension-tester/blah.ext',
+        'folder url: strip extension from parent and add to child';
+
+    my $folder = $arch2->getFolder($now);
+    ok defined $folder, 'getFolder with url extension';
+
+    is $folder->get('url'),
+        $arch2->getFolderUrl($folder->getMenuTitle),
+        'getFolderUrl and folder getUrl match';
+}
 
 my $sameFolder = $archive->getFolder($now);
 is($sameFolder->getId, $todayFolder->getId, 'call with same time returns the same folder');
@@ -151,6 +176,17 @@ is($sameFolder->getId, $todayFolder->getId, 'call within same day(end) returns t
 undef $sameFolder;
 $todayFolder->purge;
 is($archive->getChildCount, 0, 'leaving with an empty archive');
+
+{
+    my $archive2    = $home->addChild({
+                    className => 'WebGUI::Asset::Wobject::StoryArchive',
+                    title => 'Uncommitted',
+                    url => 'uncommitted_archive',
+                  });
+    my $guard = WebGUI::Test->cleanupGuard($archive2);
+    my $new_folder = $archive2->getFolder;
+    is $archive2->get('tagId'), $new_folder->get('tagId'), 'folder added to uncommitted archive uses the same version tag';
+}
 
 ################################################################
 #
@@ -172,7 +208,7 @@ $child->purge;
 $child = $archive->addChild({className => 'WebGUI::Asset::Story', title => 'First Story'}, @skipAutoCommit);
 my $tag1 = WebGUI::VersionTag->getWorking($session);
 $tag1->commit;
-WebGUI::Test->tagsToRollback($tag1);
+WebGUI::Test->addToCleanup($tag1);
 isa_ok($child, 'WebGUI::Asset::Story', 'addChild added and returned a Story');
 is($archive->getChildCount, 1, '... added it to the archive');
 my $folder = $archive->getFirstChild();
@@ -210,7 +246,7 @@ my $story = $oldFolder->addChild({ className => 'WebGUI::Asset::Story', title =>
 $creationDateSth->execute([$wgBday, $story->getId]);
 my $tag2 = WebGUI::VersionTag->getWorking($session);
 $tag2->commit;
-WebGUI::Test->tagsToRollback($tag2);
+WebGUI::Test->addToCleanup($tag2);
 
 {
     my $storyDB = WebGUI::Asset->newByUrl($session, $story->getUrl);
@@ -221,7 +257,7 @@ my $pastStory = $newFolder->addChild({ className => 'WebGUI::Asset::Story', titl
 $creationDateSth->execute([$yesterday, $pastStory->getId]);
 my $tag3 = WebGUI::VersionTag->getWorking($session);
 $tag3->commit;
-WebGUI::Test->tagsToRollback($tag3);
+WebGUI::Test->addToCleanup($tag3);
 
 my $templateVars;
 $templateVars = $archive->viewTemplateVariables();
@@ -255,7 +291,7 @@ $session->user({userId => 1});
 cmp_deeply(
     $templateVars,
     {
-        canPostStories => 0,
+        canPostStories => bool(0),
         mode           => 'view',
         addStoryUrl    => '',
         date_loop      => [
@@ -297,7 +333,7 @@ foreach my $storilet ($story2, $story3, $story4) {
 $archive->update({storiesPerPage => 3});
 my $tag4 = WebGUI::VersionTag->getWorking($session);
 $tag4->commit;
-WebGUI::Test->tagsToRollback($tag4);
+WebGUI::Test->addToCleanup($tag4);
 
 ##Don't assume that Admin and Visitor have the same timezone.
 $session->user({userId => 3});
@@ -424,7 +460,7 @@ cmp_bag(
     [
         {
             epochDate => ignore(),
-            story_loop => [
+            story_loop => bag(
                 {
                     creationDate => ignore(),
                     url          => ignore(),
@@ -439,7 +475,7 @@ cmp_bag(
                     editIcon     => ignore(),
                     deleteIcon   => ignore(),
                 },
-            ],
+            ),
         },
         {
             epochDate => $wgBdayMorn,
@@ -552,6 +588,8 @@ cmp_deeply(
             description => ignore(),
             'link'      => ignore(),
             date        => ignore(),
+            guid        => ignore(),
+            pubDate     => ignore(),
             author      => ignore(),
         },
         {
@@ -560,6 +598,8 @@ cmp_deeply(
             'link'      => ignore(),
             date        => ignore(),
             author      => ignore(),
+            guid        => ignore(),
+            pubDate     => ignore(),
         },
         {
             title => 'Story 3',
@@ -567,6 +607,8 @@ cmp_deeply(
             'link'      => ignore(),
             date        => ignore(),
             author      => ignore(),
+            guid        => ignore(),
+            pubDate     => ignore(),
         },
     ],
     'rssFeedItems'
@@ -579,7 +621,7 @@ cmp_deeply(
 ################################################################
 
 my $exportStorage = WebGUI::Storage->create($session);
-WebGUI::Test->storagesToDelete($exportStorage);
+WebGUI::Test->addToCleanup($exportStorage);
 my $basedir = Path::Class::Dir->new($exportStorage->getPath);
 $exportStorage->addFileFromScalar('index', 'export story archive content');
 my $assetDir  = $basedir->subdir('mystories');
@@ -661,13 +703,72 @@ $archive->update({ url => '/home/mystories.arch' });
 is($archive->getKeywordStaticURL('bar'), '/home/mystories/keyword_bar.html', '... correct URL with file extension');
 
 $archive->update({ url => '/home/mystories' });
-}
 
-#----------------------------------------------------------------------------
-# Cleanup
-END {
-    $creationDateSth->finish;
-}
+################################################################
+#
+# sortOrder
+#
+################################################################
+
+my $aaa_child = $archive->addChild({className => 'WebGUI::Asset::Story', title => 'Aaaa'}, @skipAutoCommit);
+my $zzz_child = $archive->addChild({className => 'WebGUI::Asset::Story', title => 'Zzzz'}, @skipAutoCommit);
+WebGUI::Test->addToCleanup($aaa_child);
+WebGUI::Test->addToCleanup($zzz_child);
+
+$archive->update({storiesPerPage => 25, storySortOrder => 'Alphabetically' });
+
+$tag1 = WebGUI::VersionTag->getWorking($session);
+$tag1->commit;
+WebGUI::Test->addToCleanup($tag1);
+
+$templateVars = $archive->viewTemplateVariables();
+
+cmp_deeply (
+    $templateVars->{date_loop},
+    [
+           {
+             'story_loop' => [
+                               {
+                                 'creationDate' => ignore(),
+                                 'deleteIcon' => ignore(),
+                                 'editIcon' => ignore(),
+                                 'url' => re('aaaa'),
+                                 'title' => 'Aaaa'
+                               },
+                               ignore(),
+                               ignore(),
+                               ignore(),
+                               ignore(),
+                             ],
+             'epochDate' => ignore(),
+           },
+           {
+             'story_loop' => ignore(),
+             'epochDate' => $wgBdayMorn,
+           },
+           {
+             'story_loop' => ignore(),
+             'epochDate' => $yesterdayMorn,
+           },
+          {
+             'story_loop' => [
+                               {
+                                 'creationDate' => ignore(),
+                                 'deleteIcon' => ignore(),
+                                 'editIcon' => ignore(),
+                                 'url' => re('zzzz'),
+                                 'title' => 'Zzzz'
+                               },
+                             ],
+             'epochDate' => ignore(),
+           },
+        ],
+        'viewTemplateVariables: sorted by story title'
+);
+
+}           ##  end SKIP block
+
+$creationDateSth->finish;
 
 sub simpleHrefParser {
 	my ($text) = @_;

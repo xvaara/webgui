@@ -37,7 +37,7 @@ $session->setting->set( 'specialState', '' );
 
 # Create a user for testing purposes
 my $user        = WebGUI::User->new( $session, "new" );
-WebGUI::Test->usersToDelete($user);
+WebGUI::Test->addToCleanup($user);
 $user->username( 'dufresne' );
 my $identifier  = 'ritahayworth';
 my $auth        = WebGUI::Operation::Auth::getInstance( $session, $user->authMethod, $user->userId );
@@ -63,6 +63,7 @@ my $redirectToAsset
         snippet         => $testContent,
     });
 $versionTags[-1]->commit;
+WebGUI::Test->addToCleanup($versionTags[-1]);
 
 #----------------------------------------------------------------------------
 # Tests
@@ -81,6 +82,7 @@ plan tests => 12;        # Increment this number for each test you create
 #----------------------------------------------------------------------------
 # Test operation with a public Redirect
 push @versionTags, WebGUI::VersionTag->getWorking( $session );
+WebGUI::Test->addToCleanup($versionTags[-1]);
 $redirect       
     = $node->addChild({
         className       => 'WebGUI::Asset::Redirect',
@@ -104,6 +106,7 @@ is(
 #----------------------------------------------------------------------------
 # Test operation with a private Redirect through a login
 push @versionTags, WebGUI::VersionTag->getWorking( $session );
+WebGUI::Test->addToCleanup($versionTags[-1]);
 $redirect
     = $node->addChild({
         className       => 'WebGUI::Asset::Redirect',
@@ -137,6 +140,7 @@ is(
 # Test operation with a private Redirect through a login with translate 
 # query params
 push @versionTags, WebGUI::VersionTag->getWorking( $session );
+WebGUI::Test->addToCleanup($versionTags[-1]);
 $redirect
     = $node->addChild({
         className           => 'WebGUI::Asset::Redirect',
@@ -170,12 +174,4 @@ TODO: {
     );
 };
 
-
-#----------------------------------------------------------------------------
-# Cleanup
-END {
-    for my $tag ( @versionTags ) {
-        $tag->rollback;
-    }
-
-}
+#vim:ft=perl

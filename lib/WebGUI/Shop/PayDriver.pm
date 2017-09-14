@@ -82,6 +82,38 @@ sub _buildObj {
 
 #-------------------------------------------------------------------
 
+=head2 appendCartVariables ( $var )
+
+Append the subtotal, shipping, tax, and shop credit deductions to a set of template
+variables.  Returns the modified hashreference of variables.
+
+=head3 $var
+
+A hashref.  Template variables will be added to it.  If $var is not passed, a new
+hashref is created, and that is returned.
+
+=cut
+
+sub appendCartVariables {
+    my ($self, $var) = @_;
+    $var      ||= {};
+    my $cart    = $self->getCart;
+    $var->{shippableItemsInCart} = $cart->requiresShipping;
+    $var->{subtotal} = $cart->formatCurrency($cart->calculateSubtotal);
+    $var->{shipping} = $cart->calculateShipping;
+    $var->{taxes}    = $cart->calculateTaxes;
+    my $totalPrice   = $var->{subtotal} + $var->{shipping} + $var->{taxes};
+    my $session = $self->session;
+    my $credit = WebGUI::Shop::Credit->new($session, $cart->getPosUser->userId);
+    $var->{inShopCreditAvailable} = $credit->getSum;
+    $var->{inShopCreditDeduction} = $credit->calculateDeduction($totalPrice);
+    $var->{totalPrice           } = $cart->formatCurrency($totalPrice + $var->{inShopCreditDeduction});
+    return $var;
+}
+
+
+#-------------------------------------------------------------------
+
 =head2 cancelRecurringPayment ( transaction )
 
 Cancels a recurring transaction. Returns an array containing ( isSuccess, gatewayStatus, gatewayError). Needs to be overridden by subclasses capable of dealing with recurring payments.
@@ -237,19 +269,6 @@ sub definition {
             hoverHelp       => $i18n->get('who can use help'),
             defaultValue    => 7,
         },
-        receiptEmailTemplateId => {
-            fieldType       => 'template',
-            namespace       => "Shop/EmailReceipt",
-            label           => $i18n->get("receipt email template"),
-            hoverHelp       => $i18n->get("receipt email template help"),
-            defaultValue    => 'bPz1yk6Y9uwMDMBcmMsSCg',
-        },
-        saleNotificationGroupId => {
-            fieldType       => 'group',
-            label           => $i18n->get("sale notification group"),
-            hoverHelp       => $i18n->get("sale notification group help"),
-            defaultValue    => '3',
-        },
     );
 
     my %properties = (
@@ -291,10 +310,14 @@ sub displayPaymentError {
     my ($self, $transaction) = @_;
     my $i18n    = WebGUI::International->new($self->session, "PayDriver");
     my $output  = q{<h1>} . $i18n->get('error processing payment') . q{</h1>}
-                . q{<p>} . $i18n->get('error processing payment message') . q{</p>}
-                . q{<p>} . $transaction->get('statusMessage') . q{</p>}
-                . q{<p><a href="?shop=cart;method=checkout">} . $i18n->get( 'try again' ) . q{</a></p>}
-                ;
+                . q{<p>} . $i18n->get('error processing payment message') . q{</p>};
+    if ($transaction) {
+        $output .= q{<p>} . $transaction->get('statusMessage') . q{</p>};
+    }
+    else {
+        $output .= q{<p>} . $i18n->get('unable to finish transaction') . q{</p>};
+    }
+    $output     .= q{<p><a href="?shop=cart;method=checkout">} . $i18n->get( 'try again' ) . q{</a></p>};
     return $self->session->style->userStyle($output);
 }
 
@@ -353,12 +376,13 @@ sub getAddress {
 
 =head2 getButton ( )
 
-Returns the form that will take the user to check out.
+Used for the generic, vanilla checkout form.  Must be overridden by any methods that
+use the default www_getCredentials.
 
 =cut
 
 sub getButton {
-    my $self = shift;
+    return '';
 }
 
 #-------------------------------------------------------------------
@@ -371,9 +395,7 @@ Returns the WebGUI::Shop::Cart object for the current session.
 
 sub getCart {
     my $self = shift;
-
     my $cart = WebGUI::Shop::Cart->newBySession( $self->session );
-
     return $cart;
 }
 
@@ -476,51 +498,6 @@ sub getName {
 
 #-------------------------------------------------------------------
 
-=head2 getSelectAddressButton ( returnMethod, [ buttonLabel ] )
-
-Generates a button for selecting an address.
-
-=head3 returnMethod
-
-The name of the www_ method the selected addressId should be returned to. Without the 'www_' part.
-
-=head3 buttonLabel
-
-The label for the button, defaults to the internationalized version of 'Choose billing address'.
-
-=cut
-
-sub getSelectAddressButton {
-    my $self            = shift;
-    my $returnMethod    = shift;
-    my $buttonLabel     = shift || 'Choose billing address';
-    my $session         = $self->session;
-
-    # Generate the json string that defines where the address book posts the selected address
-    my $callbackParams = {
-        url     => $session->url->page,
-        params  => [
-            { name => 'shop',               value => 'pay'          },
-            { name => 'method',             value => 'do'           },
-            { name => 'do',                 value => $returnMethod  },
-            { name => 'paymentGatewayId',   value => $self->getId   },
-        ],
-    };
-    my $callbackJson = JSON::to_json( $callbackParams );
-
-    # Generate 'Choose billing address' button
-    my $addressButton = WebGUI::Form::formHeader( $session )
-        . WebGUI::Form::hidden( $session, { name => 'shop',     value => 'address'      } )
-        . WebGUI::Form::hidden( $session, { name => 'method',   value => 'view'         } )
-        . WebGUI::Form::hidden( $session, { name => 'callback', value => $callbackJson  } )
-        . WebGUI::Form::submit( $session, { value => $buttonLabel                       } )
-        . WebGUI::Form::formFooter( $session );
-
-    return $addressButton;
-}
-
-#-------------------------------------------------------------------
-
 =head2 handlesRecurring ()
 
 Returns 0. Should be overridden to return 1 by any subclasses that can handle recurring payments.
@@ -594,6 +571,35 @@ sub processPayment {
 
 =head2 processPropertiesFromFormPost ( )
 
+Updates pay driver with data from Form.
+
+=cut
+
+sub processTemplate {
+    my $self       = shift;
+    my $session    = $self->session;
+    my $templateId = shift;
+    my $var        = shift;
+    my $i18n       = WebGUI::International->new($session, 'PayDriver');
+
+    my $template = WebGUI::Asset::Template->new($session, $templateId);
+    my $output;
+    if (defined $template) {
+        $template->prepare;
+        $output = $template->process($var);
+    }
+    else {
+        $output = $i18n->get('template gone');
+    }
+    return $output;
+
+
+}
+
+#-------------------------------------------------------------------
+
+=head2 processPropertiesFromFormPost ( )
+
 Updates ship driver with data from Form.
 
 =cut
@@ -648,11 +654,9 @@ sub processTransaction {
     # Setup dynamic transaction
     unless (defined $transaction) {     
         my $transactionProperties;
-        $transactionProperties->{ paymentMethod     } = $self;
-        $transactionProperties->{ cart              } = $cart;
-        $transactionProperties->{ paymentAddress    } = $paymentAddress if defined $paymentAddress;
-        $transactionProperties->{ isRecurring       } = $cart->requiresRecurringPayment;
-    
+        $transactionProperties->{ paymentMethod } = $self;
+        $transactionProperties->{ cart          } = $cart;
+
         # Create a transaction...
         $transaction = WebGUI::Shop::Transaction->create( $self->session, $transactionProperties );
     }
@@ -662,7 +666,7 @@ sub processTransaction {
     if ($success) {
         $transaction->completePurchase($transactionCode, $statusCode, $statusMessage);
         $cart->onCompletePurchase;
-        $self->sendNotifications($transaction);
+        $transaction->sendNotifications();
     }
     else {
         $transaction->denyPurchase($transactionCode, $statusCode, $statusMessage);
@@ -679,49 +683,6 @@ sub processTransaction {
 Accessor for the session object.  Returns the session object.
 
 =cut
-
-
-#-------------------------------------------------------------------
-
-=head2 sendNotifications ( transaction )
-
-Sends out a receipt and a sale notification to the buyer and the store owner respectively.
-
-=cut
-
-sub sendNotifications {
-    my ($self, $transaction) = @_;
-    my $session = $self->session;
-    my $i18n    = WebGUI::International->new($session, 'PayDriver');
-    my $url     = $session->url;
-    my $var     = $transaction->getTransactionVars;
-
-    # render
-    my $template = WebGUI::Asset::Template->new( $session, $self->get("receiptEmailTemplateId") );
-    my $inbox = WebGUI::Inbox->new($session);
-    my $receipt = $template->process( $var );
-    WebGUI::Macro::process($session, \$receipt);
-
-    # purchase receipt
-    $inbox->addMessage( {
-        message     => $receipt,
-        subject     => $i18n->get('receipt subject') . ' ' . $transaction->get('orderNumber'),
-        userId      => $transaction->get('userId'),
-        status      => 'completed',
-    } );
-    
-    # shop owner notification
-    # Shop owner uses method=view rather than method=viewMy
-    $var->{viewDetailUrl} = $url->page( 'shop=transaction;method=view;transactionId='.$transaction->getId, 1 );
-    my $notification = $template->process( $var );
-    WebGUI::Macro::process($session, \$notification);
-    $inbox->addMessage( {
-        message     => $notification,
-        subject     => $i18n->get('a sale has been made') . ' ' . $transaction->get('orderNumber'),
-        groupId     => $self->get('saleNotificationGroupId'),
-        status      => 'unread',
-    } );
-}
 
 #-------------------------------------------------------------------
 
@@ -764,6 +725,31 @@ a GUID.
 
 #-------------------------------------------------------------------
 
+=head2 www_getCredentials ( )
+
+Displays a summary of the cart, and a button to checkout.  Plugins that need to get additional
+information, or perform additional checks, should override this method.  Uses the getButton
+method to create the checkout button.
+
+=cut
+
+sub www_getCredentials {
+    my ($self)    = @_;
+    my $session = $self->session;
+
+    # Generate 'Proceed' button
+    my $i18n = WebGUI::International->new($session, 'PayDriver_Cash');
+    my $var = {
+        proceedButton => $self->getButton,
+    };
+    $self->appendCartVariables($var);
+
+    my $output   = $self->processTemplate($self->get("summaryTemplateId"), $var);
+    return $session->style->userStyle($output);
+}
+
+#-------------------------------------------------------------------
+
 =head2 www_edit ( )
 
 Generates an edit form.
@@ -803,5 +789,20 @@ sub www_editSave {
     return undef;
 }
 
+=head2 CHANGES ( )
+
+=head3 7.9.4
+
+In 7.9.4, the base PayDriver class was changed to accomodate the new Cart.  The Cart is now in
+charge of gathering billing information.  The PayDriver's job is to summarize all the payment
+information for the user to review (www_getCredentials) and provide the user a button to complete
+the checkout process (getButton), and then to complete the checkout.  PayDrivers can
+do additional things beyond those steps, like the PayPal driver.
+
+PayDrivers also now have a defult template for displaying that screen, the summaryTemplate.
+While each core driver has its own template, custom drivers can use any existing one that
+meets its needs.
+
+=cut
 
 1;

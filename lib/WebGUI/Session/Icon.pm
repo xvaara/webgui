@@ -16,6 +16,7 @@ package WebGUI::Session::Icon;
 
 use strict;
 use WebGUI::International;
+use Scalar::Util qw( weaken );
 
 
 =head1 NAME
@@ -86,7 +87,8 @@ Any URL parameters that need to be tacked on to the current URL to accomplish wh
 
 =head3 pageURL
 
-The URL to any page. Defaults to the current page.
+The URL to any page. Defaults to the current page.  If a URL is passed, the gateway URL from the site's config
+file will be prepended to it.
 
 =cut
 
@@ -95,8 +97,8 @@ sub copy {
 	my $urlParams = shift;
 	my $pageURL = shift || $self->session->url->getRequestedUrl;
 	my $i18n = WebGUI::International->new($self->session,'Icon');
-        my $output = '<p class="toolbarIcon" style="display:inline;vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
-        $output .= '<img src="'.$self->getBaseURL().'copy.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Copy').'" title="'.$i18n->get('Copy').'" /></a></p>';
+        my $output = '<span class="toolbarIcon" style="vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
+        $output .= '<img src="'.$self->getBaseURL().'copy.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Copy').'" title="'.$i18n->get('Copy').'" /></a></span>';
         return $output;
 }
 
@@ -112,7 +114,8 @@ Any URL parameters that need to be tacked on to the current URL to accomplish wh
 
 =head3 pageURL
 
-The URL to any page. Defaults to the current page.
+The URL to any page. Defaults to the current page.  If a URL is passed, the gateway URL from the site's config
+file will be prepended to it.
 
 =cut
 
@@ -121,8 +124,8 @@ sub cut {
         my $urlParams = shift;
         my $pageURL = shift || $self->session->url->getRequestedUrl;
 	my $i18n = WebGUI::International->new($self->session,'Icon');
-        my $output = '<p class="toolbarIcon" style="display:inline;vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
-        $output .= '<img src="'.$self->getBaseURL().'cut.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Cut').'" title="'.$i18n->get('Cut').'" /></a></p>';
+        my $output = '<span class="toolbarIcon" style="vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
+        $output .= '<img src="'.$self->getBaseURL().'cut.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Cut').'" title="'.$i18n->get('Cut').'" /></a></span>';
         return $output;
 }
 
@@ -152,7 +155,9 @@ Any URL parameters that need to be tacked on to the current URL to accomplish wh
 
 =head3 pageURL
 
-The URL to any page. Defaults to the current page.
+The URL to any page. Defaults to the current page.  If a URL is passed, the gateway URL from the site's config
+file will be prepended to it.
+
 
 =head3 confirmText 
 
@@ -166,11 +171,11 @@ sub delete {
         my $pageURL = shift || $self->session->url->getRequestedUrl;
 	my $confirmText = shift; 
 	if($confirmText) {
-		$confirmText = qq| onclick="return confirm('$confirmText')" |;
+		$confirmText = qq| onclick="return confirm('$confirmText');" |;
 	}
 	my $i18n = WebGUI::International->new($self->session,'Icon');
-        my $output = '<p class="toolbarIcon" style="display:inline;vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'" '.$confirmText.'>';
-	$output .= '<img src="'.$self->getBaseURL().'delete.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Delete').'" title="'.$i18n->get('Delete').'" /></a></p>';
+        my $output = '<span class="toolbarIcon" style="vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'" '.$confirmText.'>';
+	$output .= '<img src="'.$self->getBaseURL().'delete.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Delete').'" title="'.$i18n->get('Delete').'" /></a></span>';
 	return $output;
 }
 
@@ -190,7 +195,7 @@ sub drag {
 	my $self = shift;
 	my $extras = shift;
 	my $i18n = WebGUI::International->new($self->session,'Icon');
-        return '<p class="toolbarIcon" style="display:inline;vertical-align:middle;"><img '.$extras.' src="'.$self->getBaseURL().'drag.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Drag').'" title="'.$i18n->get('Drag').'" /></p>';
+        return '<span class="toolbarIcon" style="vertical-align:middle;"><img '.$extras.' src="'.$self->getBaseURL().'drag.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Drag').'" title="'.$i18n->get('Drag').'" /></span>';
 }
 
 #-------------------------------------------------------------------
@@ -205,7 +210,8 @@ Any URL parameters that need to be tacked on to the current URL to accomplish wh
 
 =head3 pageURL
 
-The URL to any page. Defaults to the current page.
+The URL to any page. Defaults to the current page.  If a URL is passed, the gateway URL from the site's config
+file will be prepended to it.
 
 =cut
 
@@ -214,8 +220,8 @@ sub edit {
         my $urlParams = shift;
         my $pageURL = shift || $self->session->url->getRequestedUrl;
 	my $i18n = WebGUI::International->new($self->session,'Icon');
-        my $output = '<p class="toolbarIcon" style="display:inline;vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
-        $output .= '<img src="'.$self->getBaseURL().'edit.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Edit').'" title="'.$i18n->get('Edit').'" /></a></p>';
+        my $output = '<span class="toolbarIcon" style="vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
+        $output .= '<img src="'.$self->getBaseURL().'edit.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Edit').'" title="'.$i18n->get('Edit').'" /></a></span>';
         return $output;
 }
 
@@ -231,7 +237,9 @@ Any URL parameters that need to be tacked on to the current URL to accomplish wh
 
 =head3 pageURL
 
-The URL to any page. Defaults to the current page.
+The URL to any page. Defaults to the current page.  If a URL is passed, the gateway URL from the site's config
+file will be prepended to it.
+
 
 =cut
 
@@ -240,8 +248,8 @@ sub export {
         my $urlParams = shift;
         my $pageURL = shift || $self->session->url->getRequestedUrl;
 	my $i18n = WebGUI::International->new($self->session,'Icon');
-        my $output = '<p class="toolbarIcon" style="display:inline;vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
-        $output .= '<img src="'.$self->getBaseURL().'export.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Export').'" title="'.$i18n->get('Export').'" /></a></p>';
+        my $output = '<span class="toolbarIcon" style="vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
+        $output .= '<img src="'.$self->getBaseURL().'export.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Export').'" title="'.$i18n->get('Export').'" /></a></span>';
         return $output;
 }
 
@@ -282,7 +290,9 @@ Any URL parameters that need to be tacked on to the current URL to accomplish wh
 
 =head3 pageURL
 
-The URL to any page. Defaults to the current page.
+The URL to any page. Defaults to the current page.  If a URL is passed, the gateway URL from the site's config
+file will be prepended to it.
+
 
 =cut
 
@@ -291,8 +301,8 @@ sub locked {
         my $urlParams = shift;
         my $pageURL = shift || $self->session->url->getRequestedUrl;
 	my $i18n = WebGUI::International->new($self->session,'Icon');
-        my $output = '<p class="toolbarIcon" style="display:inline;vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
-        $output .= '<img src="'.$self->getBaseURL().'locked.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('locked').'" title="'.$i18n->get('locked').'" /></a></p>';
+        my $output = '<span class="toolbarIcon" style="vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
+        $output .= '<img src="'.$self->getBaseURL().'locked.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('locked').'" title="'.$i18n->get('locked').'" /></a></span>';
         return $output;
 }
 
@@ -308,7 +318,9 @@ Any URL parameters that need to be tacked on to the current URL to accomplish wh
 
 =head3 pageURL
 
-The URL to any page. Defaults to the current page.
+The URL to any page. Defaults to the current page.  If a URL is passed, the gateway URL from the site's config
+file will be prepended to it.
+
 
 =cut
 
@@ -317,8 +329,8 @@ sub manage {
         my $urlParams = shift;
         my $pageURL = shift || $self->session->url->getRequestedUrl;
 	my $i18n = WebGUI::International->new($self->session,'Icon');
-        my $output = '<p class="toolbarIcon" style="display:inline;vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
-        $output .= '<img src="'.$self->getBaseURL().'manage.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Manage').'" title="'.$i18n->get('Manage').'" /></a></p>';
+        my $output = '<span class="toolbarIcon" style="vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
+        $output .= '<img src="'.$self->getBaseURL().'manage.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Manage').'" title="'.$i18n->get('Manage').'" /></a></span>';
         return $output;
 }
 
@@ -334,7 +346,9 @@ Any URL parameters that need to be tacked on to the current URL to accomplish wh
 
 =head3 pageURL
 
-The URL to any page. Defaults to the current page.
+The URL to any page. Defaults to the current page.  If a URL is passed, the gateway URL from the site's config
+file will be prepended to it.
+
 
 =cut
 
@@ -343,8 +357,8 @@ sub moveBottom {
         my $urlParams = shift;
         my $pageURL = shift || $self->session->url->getRequestedUrl;
 	my $i18n = WebGUI::International->new($self->session,'Icon');
-        my $output = '<p class="toolbarIcon" style="display:inline;vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
-        $output .= '<img src="'.$self->getBaseURL().'moveBottom.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Move To Bottom').'" title="'.$i18n->get('Move To Bottom').'" /></a></p>';
+        my $output = '<span class="toolbarIcon" style="vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
+        $output .= '<img src="'.$self->getBaseURL().'moveBottom.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Move To Bottom').'" title="'.$i18n->get('Move To Bottom').'" /></a></span>';
         return $output;
 }
 
@@ -360,7 +374,9 @@ Any URL parameters that need to be tacked on to the current URL to accomplish wh
 
 =head3 pageURL
 
-The URL to any page. Defaults to the current page.
+The URL to any page. Defaults to the current page.  If a URL is passed, the gateway URL from the site's config
+file will be prepended to it.
+
 
 =head3 disabled
 
@@ -374,11 +390,11 @@ sub moveDown {
         my $pageURL = shift || $self->session->url->getRequestedUrl;
 	my $disabled = shift;
 	my $i18n = WebGUI::International->new($self->session,'Icon');
-        my $output = '<p class="toolbarIcon" style="display:inline;vertical-align:middle;">';
+        my $output = '<span class="toolbarIcon" style="vertical-align:middle;">';
         $output .= '<a href="'.$self->session->url->gateway($pageURL,$urlParams).'">' unless $disabled;
         $output .= '<img src="'.$self->getBaseURL().'moveDown.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Move Down').'" title="'.$i18n->get('Move Down').'" />';
         $output .= '</a>' unless $disabled;
-        $output .= '</p>';
+        $output .= '</span>';
         return $output;
 }
 
@@ -394,7 +410,9 @@ Any URL parameters that need to be tacked on to the current URL to accomplish wh
 
 =head3 pageURL
 
-The URL to any page. Defaults to the current page.
+The URL to any page. Defaults to the current page.  If a URL is passed, the gateway URL from the site's config
+file will be prepended to it.
+
 
 =cut
 
@@ -403,8 +421,8 @@ sub moveLeft {
         my $urlParams = shift;
         my $pageURL = shift || $self->session->url->getRequestedUrl;
 	my $i18n = WebGUI::International->new($self->session,'Icon');
-        my $output = '<p class="toolbarIcon" style="display:inline;vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
-        $output .= '<img src="'.$self->getBaseURL().'moveLeft.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Move Left').'" title="'.$i18n->get('Move Left').'" /></a></p>';
+        my $output = '<span class="toolbarIcon" style="vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
+        $output .= '<img src="'.$self->getBaseURL().'moveLeft.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Move Left').'" title="'.$i18n->get('Move Left').'" /></a></span>';
         return $output;
 }
 
@@ -420,7 +438,9 @@ Any URL parameters that need to be tacked on to the current URL to accomplish wh
 
 =head3 pageURL
 
-The URL to any page. Defaults to the current page.
+The URL to any page. Defaults to the current page.  If a URL is passed, the gateway URL from the site's config
+file will be prepended to it.
+
 
 =cut
 
@@ -429,8 +449,8 @@ sub moveRight {
         my $urlParams = shift;
         my $pageURL = shift || $self->session->url->getRequestedUrl;
 	my $i18n = WebGUI::International->new($self->session,'Icon');
-        my $output = '<p class="toolbarIcon" style="display:inline;vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
-        $output .= '<img src="'.$self->getBaseURL().'moveRight.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Move Right').'" title="'.$i18n->get('Move Right').'" /></a></p>';
+        my $output = '<span class="toolbarIcon" style="vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
+        $output .= '<img src="'.$self->getBaseURL().'moveRight.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Move Right').'" title="'.$i18n->get('Move Right').'" /></a></span>';
         return $output;
 }
 
@@ -446,7 +466,9 @@ Any URL parameters that need to be tacked on to the current URL to accomplish wh
 
 =head3 pageURL
 
-The URL to any page. Defaults to the current page.
+The URL to any page. Defaults to the current page.  If a URL is passed, the gateway URL from the site's config
+file will be prepended to it.
+
 
 =cut
 
@@ -455,8 +477,8 @@ sub moveTop {
         my $urlParams = shift;
         my $pageURL = shift || $self->session->url->getRequestedUrl;
 	my $i18n = WebGUI::International->new($self->session,'Icon');
-        my $output = '<p class="toolbarIcon" style="display:inline;vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
-        $output .= '<img src="'.$self->getBaseURL().'moveTop.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Move To Top').'" title="'.$i18n->get('Move To Top').'" /></a></p>';
+        my $output = '<span class="toolbarIcon" style="vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
+        $output .= '<img src="'.$self->getBaseURL().'moveTop.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Move To Top').'" title="'.$i18n->get('Move To Top').'" /></a></span>';
         return $output;
 }
 
@@ -472,7 +494,9 @@ Any URL parameters that need to be tacked on to the current URL to accomplish wh
 
 =head3 pageURL
 
-The URL to any page. Defaults to the current page.
+The URL to any page. Defaults to the current page.  If a URL is passed, the gateway URL from the site's config
+file will be prepended to it.
+
 
 =head3 disabled
 
@@ -486,11 +510,11 @@ sub moveUp {
         my $pageURL = shift || $self->session->url->getRequestedUrl;
 	my $disabled = shift;
 	my $i18n = WebGUI::International->new($self->session,'Icon');
-        my $output = '<p class="toolbarIcon" style="display:inline;vertical-align:middle;">';
+        my $output = '<span class="toolbarIcon" style="vertical-align:middle;">';
         $output .= '<a href="'.$self->session->url->gateway($pageURL,$urlParams).'">' unless $disabled;
         $output .= '<img src="'.$self->getBaseURL().'moveUp.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Move Up').'" title="'.$i18n->get('Move Up').'" />';
         $output .= '</a>' unless $disabled;
-        $output .= '</p>';
+        $output .= '</span>';
         return $output;
 }
 
@@ -510,7 +534,9 @@ A reference to the current session.
 sub new {
 	my $class = shift;
 	my $session = shift;
-	bless {_session=>$session}, $class;
+	my $self = bless {_session=>$session}, $class;
+        weaken( $self->{_session} );
+        return $self;
 }
 
 
@@ -540,7 +566,9 @@ Any URL parameters that need to be tacked on to the current URL to accomplish wh
 
 =head3 pageURL
 
-The URL to any page. Defaults to the current page.
+The URL to any page. Defaults to the current page.  If a URL is passed, the gateway URL from the site's config
+file will be prepended to it.
+
 
 =cut
 
@@ -549,8 +577,8 @@ sub shortcut {
         my $urlParams = shift;
         my $pageURL = shift || $self->session->url->getRequestedUrl;
 	my $i18n = WebGUI::International->new($self->session,'Icon');
-        my $output = '<p class="toolbarIcon" style="display:inline;vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
-        $output .= '<img src="'.$self->getBaseURL().'shortcut.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Create Shortcut').'" title="'.$i18n->get('Create Shortcut').'" /></a></p>';
+        my $output = '<span class="toolbarIcon" style="vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
+        $output .= '<img src="'.$self->getBaseURL().'shortcut.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('Create Shortcut').'" title="'.$i18n->get('Create Shortcut').'" /></a></span>';
         return $output;
 }
 
@@ -566,7 +594,9 @@ Any URL parameters that need to be tacked on to the current URL to accomplish wh
 
 =head3 pageURL
 
-The URL to any page. Defaults to the current page.
+The URL to any page. Defaults to the current page.  If a URL is passed, the gateway URL from the site's config
+file will be prepended to it.
+
 
 =cut
 
@@ -575,12 +605,10 @@ sub view {
         my $urlParams = shift;
         my $pageURL = shift || $self->session->url->getRequestedUrl;
 	my $i18n = WebGUI::International->new($self->session,'Icon');
-        my $output = '<p class="toolbarIcon" style="display:inline;vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
-        $output .= '<img src="'.$self->getBaseURL().'view.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('View').'" title="'.$i18n->get('View').'" /></a></p>';
+        my $output = '<span class="toolbarIcon" style="vertical-align:middle;"><a href="'.$self->session->url->gateway($pageURL,$urlParams).'">';
+        $output .= '<img src="'.$self->getBaseURL().'view.gif" style="vertical-align:middle;border: 0px;" alt="'.$i18n->get('View').'" title="'.$i18n->get('View').'" /></a></span>';
         return $output;
 }
 
 
-
 1;
-

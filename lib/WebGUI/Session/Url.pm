@@ -18,8 +18,10 @@ package WebGUI::Session::Url;
 use strict;
 use URI;
 use URI::Escape;
+use Scalar::Util qw( weaken );
 use WebGUI::International;
 use WebGUI::Utility;
+use Encode;
 
 
 =head1 NAME
@@ -246,6 +248,23 @@ sub getBackToSiteURL {
 
 #-------------------------------------------------------------------
 
+=head2 getRawUrl ( )
+
+Gets the URL from the request object and decodes it from UTF8.  This has the gateway and
+query and fragment parts.
+
+=cut
+
+sub getRawUrl {
+	my $self = shift;
+	unless ($self->{_rawUrl}) {
+		$self->{_rawUrl} = decode_utf8($self->session->request->uri);
+	}
+	return $self->{_rawUrl};
+}
+
+#-------------------------------------------------------------------
+
 =head2 getRefererUrl ( )
 
 Returns the URL of the page this request was refered from (no gateway, no query params, just the page url). Returns undef if there was no referer.
@@ -322,7 +341,7 @@ sub getRequestedUrl {
 	my $self = shift;
 	return undef unless ($self->session->request);
 	unless ($self->{_requestedUrl}) {
-		$self->{_requestedUrl} = $self->session->request->uri;
+		$self->{_requestedUrl} = decode_utf8($self->session->request->uri);
 		my $gateway = $self->session->config->get("gateway");
 		$self->{_requestedUrl} =~ s/^$gateway([^?]*)\??.*$/$1/;
 	}
@@ -334,7 +353,7 @@ sub getRequestedUrl {
 
 =head2 getSiteURL ( )
 
-Returns a constructed site url. The returned value can be overridden using the setSiteURL function.
+Returns a constructed site url without the gateway. The returned value can be overridden using the setSiteURL function.
 
 =cut
 
@@ -389,7 +408,7 @@ sub makeAbsolute {
 
 =head2 makeCompliant ( string )
 
-Returns a string that has made into a WebGUI compliant URL based upon the language being submitted.
+Returns a string that has been made into a WebGUI compliant URL.
 
 =head3 string
 
@@ -398,10 +417,15 @@ The string to make compliant. This is usually a page title or a filename.
 =cut
 
 sub makeCompliant {
-	my $self = shift;
-	my $url = shift;
-	my $i18n = WebGUI::International->new($self->session);
-	return $i18n->makeUrlCompliant($url);
+    my $self = shift;
+    my $url = shift;
+    $url =~ s{^\s+}{};          # remove leading whitespace
+    $url =~ s{\s+$}{};          # remove trailing whitespace
+    $url =~ s{^/+}{};           # remove leading slashes
+    $url =~ s{/+$}{};           # remove trailing slashes
+    $url =~ s{[^\w/:.-]+}{-}g; # replace anything aside from word or other allowed characters with dashes
+    $url =~ tr{/-}{/-}s;        # replace multiple slashes and dashes with singles.
+    return $url;
 }
 
 #-------------------------------------------------------------------
@@ -419,7 +443,9 @@ A reference to the current session.
 sub new {
 	my $class = shift;
 	my $session = shift;
-	bless {_session=>$session}, $class;
+	my $self = bless {_session=>$session}, $class;
+        weaken( $self->{_session} );
+        return $self;
 }
 
 #-------------------------------------------------------------------
@@ -521,16 +547,14 @@ The string to urlize.
 =cut
 
 sub urlize {
-    my $self = shift;
-    my ($value);
-    $value = lc(shift);		#lower cases whole string
+    my $self  = shift;
+    my $value = lc(shift);		#lower cases whole string
     $value = $self->makeCompliant($value);
 
     # remove /./ or /../
     $value =~ s{(^|/)(?:\.\.?/)*}{$1}g;
 
     # remove trailing slashes
-    $value =~ s/\/$//;
     return $value;
 }
 
