@@ -16,7 +16,7 @@ package WebGUI::Asset;
 
 use Carp qw( croak confess );
 use Scalar::Util qw( blessed weaken );
-use Clone qw(clone);
+use Storable qw/dclone/;
 use JSON;
 use HTML::Packer;
 
@@ -2721,7 +2721,7 @@ to set the keywords for this asset.
 sub update {
 	my $self = shift;
 	my $requestedProperties = shift;
-    my $properties = clone($requestedProperties);
+    my $properties = dclone($requestedProperties);
 	$properties->{lastModified} = time();
 	
     # if keywords were specified, then let's set them the right way
@@ -3162,9 +3162,14 @@ sub www_editSave {
     elsif ($proceed ne "") {
         my $method = "www_".$session->form->process("proceed");
         $session->asset($object);
-        return $session->asset->$method();
+        if( $session->asset->can($method) ) { 
+            return $session->asset->$method();
+        }
+        else {
+            $session->log->warn("proceed method of $method specified but that method doesn't exist in " . ref($session->asset));
+            # else fall through to the default handling below
+        }
     }
-
     $session->asset($object->getContainer);
     return $session->asset->www_view;
 }

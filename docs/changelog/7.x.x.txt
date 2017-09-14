@@ -1,3 +1,40 @@
+7.10.31
+ - fixed: Warnings about API changes in POE::Component::IKC::ClientLite
+ - fixed: Allow WebGUI::Cache and all consumers to fetch SSL URLs, but not verify the certificates.
+
+7.10.30
+ - fixed: Do not generate the Not Found page when JS or CSS is requested.  In admin mode, this is bypassed so that admins can see which pages are really missing and can easily add them.
+ - fixed: Allow IS NULL/IS NOT NULL queries in the Asset Report.
+ - fixed #12461: Carousel fails to initial the rich editor in multiple tabs
+
+7.10.29
+ - fixed #12454: Email to Group ignores the From field
+ - fixed #12455: USPS Ship driver fails
+ - fixed #12456: style type not declared in the minicart template
+
+7.10.28
+ - fixed: Clearing the caches for groups that don't exist, but have created group objects.
+ - fixed #12398: WebGUI still uses Clone (missed Spectre code)
+ - fixed #12413: Cropping problem or bug?
+
+7.10.27
+ - fixed #12379: userImport documentation error
+ - fixed #12382: WebGUI::Crud does not work with all form types
+ - fixed: Threads with no posts return the wrong lastReply data.
+ - fixed #12339: Upgrade to 7.10 causes metadata values to "disappear" (Dale Trexel)
+ - Upgraded TinyMCE to 3.5.6
+ - fixed #12362: Thingy default Y/N field overly default
+ - fixed #12385: UTF-8 characters in Asset title break the Trash
+ - fixed ... and the same problem in the Clipboard
+ - fixed: UpdateAssetSubscribers workflow activity ERRORs if the group cannot be found.
+ - fixed: EMS has issues showing badges WITHOUT related badge groups.
+ - fixed: It's okay to paste assets which are archived, because if you don't they stay in the clipboard forever.
+ - fixed #12386: Story Manager - Carousel rendering broken in Story
+ - fixed #12386: Story Manager - Carousel rendering broken in Story
+ - fixed #12384: Click and drag reordering does not work in IE9
+ - fixed: MessageBoard tolerates Collaboration children not yet having a value for lastPostId
+ - on invalid proceed method in call to editSave, warn and recover rather than run time error
+
 7.10.26
  - fixed: Template diagnostics when called without a session asset.
  - fixed: #12378 Wiki search does not work with some metacharacters

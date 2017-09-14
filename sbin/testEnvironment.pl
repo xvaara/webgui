@@ -134,7 +134,6 @@ checkModule("File::Path",                   "2.07"       );
 checkModule("Module::Find",                 "0.06"       );
 checkModule("Class::C3",                    "0.21"       );
 checkModule("Params::Validate",             "0.91"       );
-checkModule("Clone",                        "0.31"       );
 checkModule('JavaScript::Packer',           '1.002'      );
 checkModule('CSS::Packer',                  '1.000'      );
 checkModule('HTML::Packer',                 "1.000"      );
@@ -165,6 +164,7 @@ checkModule('common::sense',                '3.2'        );
 checkModule('Geo::Coder::Googlev3',         '0.07'       );
 # Plack is required for plebgui
 checkModule('Plack'                                      );
+checkModule('Storable',                     '2.00'       );
 
 failAndExit("Required modules are missing, running no more checks.") if $missingModule;
 

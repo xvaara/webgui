@@ -255,7 +255,7 @@ userImport - Bulk load users into WebGUI database
 
  userImport --configFile config.conf --usersFile pathname
             [--authMethod method]
-            [--canChangePasswd]
+            [--canChangePass]
             [--delimiter string]
             [--expireOffset integer [--expireUnits string]]
             [--groups groupid,...]
@@ -308,7 +308,7 @@ names are:
 
 =item B<expireOffset>
 
-=item Any valid User Profile field name available in WebGUI's database, e.g. B<firstName>, B<lastName>, B<mail>, etc.
+=item Any valid User Profile field name available in WebGUI's database, e.g. B<firstName>, B<lastName>, B<email>, etc.
 
 =back
 
